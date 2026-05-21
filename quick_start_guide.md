@@ -1,12 +1,12 @@
 # Quick Start Guide: Real-World LLM Workflows on Calyx
 
-This guide explains how to leverage the **Calyx P2P Network** to execute real-world large language model workflows (such as Google's Gemma-2B/7B) by splitting model layers across decentralized participants. It also outlines how nodes configure their resource boundaries to prevent overloading.
+This guide explains how to leverage the **Calyx P2P Network** to execute real-world large language model workflows (such as LLM-2B/7B) by splitting model layers across decentralized participants. It also outlines how nodes configure their resource boundaries to prevent overloading.
 
 ---
 
-## 1. Architectural Concept: Slicing Gemma
+## 1. Architectural Concept: Slicing an LLM
 
-A standard Gemma model (e.g., Gemma-2B containing 18 layers) is split across the network. Instead of a single weak machine running the whole model, three independent nodes host subsets of the layers:
+A standard large language model (e.g., LLM-2B containing 18 layers) is split across the network. Instead of a single weak machine running the whole model, three independent nodes host subsets of the layers:
 
 ```
 [Local Agent / Client] 
@@ -31,10 +31,10 @@ A standard Gemma model (e.g., Gemma-2B containing 18 layers) is split across the
 
 ## 2. Quick Start: Setting Up a Resource Provider (Server Node)
 
-If you have a local GPU/CPU and want to share a segment of the Gemma model (e.g., layers 1 to 6) with the network, you run a Calyx Server node.
+If you have a local GPU/CPU and want to share a segment of the LLM model (e.g., layers 1 to 6) with the network, you run a Calyx Server node.
 
 ### A. Load Real Weights into the Engine
-To hook up real Gemma weights, implement a reader to map weights from a standard `.gguf` file or `safetensors` file into the `TransformerLayer` variables in `engine/transformer.go`:
+To hook up real model weights, implement a reader to map weights from a standard `.gguf` file or `safetensors` file into the `TransformerLayer` variables in `engine/transformer.go`:
 
 ```go
 package main
@@ -45,37 +45,59 @@ import (
 )
 
 func main() {
-	// Initialize a transformer layer matching Gemma-2B dimensions (hiddenDim: 2048)
+	// Initialize a transformer layer matching LLM-2B dimensions (hiddenDim: 2048)
 	layer := engine.NewTransformerLayer(2048)
 	
 	// Load actual weights from a local GGUF model file
-	err := loadGemmaWeights(layer, "models/gemma-2b-it.gguf", 1) // Layer Index 1
+	err := loadModelWeights(layer, "models/llm-2b-it.gguf", 1) // Layer Index 1
 	if err != nil {
-		log.Fatalf("Failed to load Gemma weights: %v", nil)
+		log.Fatalf("Failed to load LLM weights: %v", nil)
 	}
 }
 ```
 
 ### B. Launch Server Node
-Launch your node, defining its available port, layer segment capacity, and registration details:
+Launch your node, defining its available port, layer segment capacity, model identifier, local binary weights file path, public STUN server, and bootstrap registration details:
 ```bash
-./bin/connect -mode=server -addr=your-public-ip:50051 -bootstrap=bootstrap-node-ip:50050 -start=1 -end=6 -ttl=5m -difficulty=3
+./bin/connect -mode=server -addr=your-public-ip:50051 -bootstrap=bootstrap-node-ip:50050 -start=1 -end=6 -model=provider/llm-2b -weights=weights/layer_1_6.calyx -stun-server=stun.example.com:19302 -ttl=5m -difficulty=3
 ```
+> [!NOTE]
+> If `layer_1_6.calyx` does not exist, the server will trigger its **self-healing engine** to dynamically create a mathematically valid identity matrix weight set at that path.
 
 ---
 
 ## 3. Quick Start: Running a Local Agent (Client Node)
 
-To execute a prompt utilizing the shared resources of the cluster:
+To query and execute a prompt utilizing the shared resources of the cluster:
+
+### A. Discover Models Available on the Network
+Before initializing an inference pipeline, you can query the Bootstrap directory to see which models are currently online and which nodes are providing specific layers:
+```bash
+./bin/connect -mode=list-models -bootstrap=bootstrap-node-ip:50050
+```
+This prints a beautifully formatted global directory catalog directly to your terminal:
+```text
+================================================================
+           CALYX DISTRIBUTED P2P ACTIVE MODEL CATALOG
+================================================================
+MODEL: provider/llm-2b
+  - Provider: 127.0.0.1:50101 (Layers: 1-4)
+MODEL: provider/llm-8b
+  - Provider: 127.0.0.1:50102 (Layers: 5-8)
+================================================================
+```
+
+### B. Execute Inference Pipeline
+Once you've identified a model, stream tokens down the pipeline:
 
 1. **Local Tokenization**: Your agent parses the prompt text locally into token IDs and extracts the initial activations embedding tensor:
    ```go
    tokens := tokenizer.Encode("Write a python script to reverse a string", true)
    inputTensor := embeddingLayer.Embed(tokens) // Dimension: [1, seq_len, 2048]
    ```
-2. **Dynamic Route Finding**: Start the client node. It uses Kademlia DHT recursive lookups (`dht/kademlia.go`) to discover peer nodes providing the required layer sequence:
+2. **Dynamic Route Finding**: Start the client node specifying the target model ID:
    ```bash
-   ./bin/connect -mode=client -bootstrap=bootstrap-node-ip:50050 -start=1 -end=18 -task=gemma_inference_101 -difficulty=3
+   ./bin/connect -mode=client -bootstrap=bootstrap-node-ip:50050 -model=provider/llm-2b -start=1 -end=18 -task=llm_inference_101 -difficulty=3
    ```
 3. **Execution**: The client solves the Hashcash Proof-of-Work puzzle for the target nodes, dials them using mTLS 1.3, streams the embedding tensor down the pipeline, and collects the completed predictions.
 

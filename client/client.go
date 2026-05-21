@@ -18,6 +18,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+var ModelID = "google/gemma-2b"
+
 // RunClient runs the Client node scenario, querying the bootstrap and processing the pipeline
 func RunClient(bootstrapAddr string, startLayer, endLayer int32, taskID string, powDifficulty int, network *sync.Map, dpNoise float64, expectedMRENCLAVE string) error {
 	log.Printf("[Client] Initializing client node (weak machine)...")
@@ -72,7 +74,9 @@ func RunClient(bootstrapAddr string, startLayer, endLayer int32, taskID string, 
 		defer bootstrapConn.Close()
 
 		bootstrapClient := pb.NewBootstrapServiceClient(bootstrapConn)
-		routeResp, err := bootstrapClient.FindRoute(ctx, &pb.RouteRequest{
+		routeMD := metadata.Pairs("model-id", ModelID)
+		routeCtx := metadata.NewOutgoingContext(ctx, routeMD)
+		routeResp, err := bootstrapClient.FindRoute(routeCtx, &pb.RouteRequest{
 			StartLayer: startLayer,
 			EndLayer:   endLayer,
 		})
@@ -101,7 +105,7 @@ func RunClient(bootstrapAddr string, startLayer, endLayer int32, taskID string, 
 	p2pClient := pb.NewP2PServiceClient(serverConn)
 
 	// Send PoW challenge nonces via metadata context
-	md := metadata.Pairs("pow-nonce", nonce, "task-id", taskID)
+	md := metadata.Pairs("pow-nonce", nonce, "task-id", taskID, "model-id", ModelID)
 	streamCtx := metadata.NewOutgoingContext(context.Background(), md)
 
 	p2pStream, err := p2pClient.Forward(streamCtx)
@@ -267,5 +271,78 @@ func verifyComputation(input []float64, output []float64) error {
 		return fmt.Errorf("computation verification failed: received identical static activations (potential lazy or compromised server)")
 	}
 
+	return nil
+}
+
+// FetchAndListModels contacts the Bootstrap coordinator to retrieve and render the active model catalog
+func FetchAndListModels(bootstrapAddr string) error {
+	log.Printf("[Client] Querying global model directory from Bootstrap at %s...", bootstrapAddr)
+
+	// 1. Generate client mTLS certificate
+	cert, err := crypto.GenerateKeyPairAndCert()
+	if err != nil {
+		return fmt.Errorf("failed to generate TLS certificate: %w", err)
+	}
+
+	clientTLS := crypto.GetClientTLSConfig(cert)
+	conn, err := grpc.NewClient(bootstrapAddr, grpc.WithTransportCredentials(credentials.NewTLS(clientTLS)))
+	if err != nil {
+		return fmt.Errorf("failed to connect to bootstrap: %w", err)
+	}
+	defer conn.Close()
+
+	client := pb.NewBootstrapServiceClient(conn)
+
+	// Create context with metadata header list-models = "true"
+	md := metadata.Pairs("list-models", "true")
+	ctx, cancel := context.WithTimeout(metadata.NewOutgoingContext(context.Background(), md), 10*time.Second)
+	defer cancel()
+
+	resp, err := client.FindRoute(ctx, &pb.RouteRequest{
+		StartLayer: 1,
+		EndLayer:   1,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to query model catalog: %w", err)
+	}
+
+	fmt.Println("\n================================================================================")
+	fmt.Println("       💎 CALYX GLOBAL MODEL DISCOVERY DIRECTORY 💎")
+	fmt.Println("================================================================================")
+
+	if len(resp.Addresses) == 0 {
+		fmt.Println("  [Warning] No active models or nodes registered on the network.")
+		fmt.Println("================================================================================")
+		return nil
+	}
+
+	var currentModel string
+	nodeCount := 0
+
+	for _, entry := range resp.Addresses {
+		if strings.HasPrefix(entry, "MODEL:") {
+			currentModel = strings.TrimPrefix(entry, "MODEL:")
+			fmt.Printf("\n📦 Model ID: \033[1;36m%s\033[0m\n", currentModel)
+
+			// Generate premium Hugging Face link matching standard naming conventions
+			hfLink := fmt.Sprintf("https://huggingface.co/%s", currentModel)
+			fmt.Printf("   🔗 Hugging Face: \033[0;34m%s\033[0m\n", hfLink)
+			fmt.Println("   🌐 Online Providers:")
+			nodeCount = 0
+		} else if strings.HasPrefix(entry, "NODE:") {
+			nodeCount++
+			details := strings.TrimPrefix(entry, "NODE:")
+			parts := strings.Split(details, "|LAYERS:")
+			if len(parts) == 2 {
+				addr := parts[0]
+				layers := parts[1]
+				fmt.Printf("      ⚡ \033[1;32m[%d]\033[0m Node: \033[1m%s\033[0m (Hosting Layers: %s)\n", nodeCount, addr, layers)
+			} else {
+				fmt.Printf("      ⚡ %s\n", details)
+			}
+		}
+	}
+
+	fmt.Println("\n================================================================================")
 	return nil
 }

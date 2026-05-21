@@ -19,7 +19,7 @@ import (
 
 func main() {
 	// 1. Define CLI flags for flexible multi-process execution
-	modeFlag := flag.String("mode", "demo", "Mode to run: 'bootstrap', 'server', 'client', or 'demo'")
+	modeFlag := flag.String("mode", "demo", "Mode to run: 'bootstrap', 'server', 'client', 'list-models', or 'demo'")
 	addrFlag := flag.String("addr", "", "Address to bind or connect to")
 	bootstrapAddrFlag := flag.String("bootstrap", "localhost:50050", "Address of the bootstrap node")
 	startLayerFlag := flag.Int("start", 1, "Starting layer (for server mode)")
@@ -29,8 +29,17 @@ func main() {
 	difficultyFlag := flag.Int("difficulty", 2, "Hashcash Proof-of-Work puzzle difficulty (number of leading zeros)")
 	dpNoiseFlag := flag.Float64("dp-noise", 0.001, "Standard deviation of Differential Privacy Gaussian noise (0.0 to disable)")
 	teeEnclaveFlag := flag.Bool("tee-enclave", true, "Simulate secure hardware enclaves (Intel SGX / AMD SEV)")
+	weightsFlag := flag.String("weights", "bin/layer_weights.bin", "Path to the binary transformer layer weights file")
+	modelFlag := flag.String("model", "google/gemma-2b", "Model ID served or requested by the node")
+	stunServerFlag := flag.String("stun-server", "stun.l.google.com:19302", "STUN server address for NAT traversal")
 
 	flag.Parse()
+
+	// Propagate configuration flags to packages
+	server.WeightsPath = *weightsFlag
+	server.ModelID = *modelFlag
+	server.StunServer = *stunServerFlag
+	client.ModelID = *modelFlag
 
 	// Configure standard log layout to make visual logging clean and neat
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
@@ -42,10 +51,12 @@ func main() {
 		runServerMode(*addrFlag, *bootstrapAddrFlag, int32(*startLayerFlag), int32(*endLayerFlag), *ttlFlag, *difficultyFlag, *teeEnclaveFlag)
 	case "client":
 		runClientMode(*bootstrapAddrFlag, int32(*startLayerFlag), int32(*endLayerFlag), *taskIDFlag, *difficultyFlag, *dpNoiseFlag)
+	case "list-models":
+		runListModelsMode(*bootstrapAddrFlag)
 	case "demo":
 		runAutomatedDemo(*ttlFlag, *difficultyFlag, *dpNoiseFlag, *teeEnclaveFlag)
 	default:
-		fmt.Printf("Unknown mode: %s. Use -mode with 'bootstrap', 'server', 'client', or 'demo'\n", *modeFlag)
+		fmt.Printf("Unknown mode: %s. Use -mode with 'bootstrap', 'server', 'client', 'list-models', or 'demo'\n", *modeFlag)
 		os.Exit(1)
 	}
 }
@@ -179,4 +190,11 @@ func handleShutdown(stopFunc func(), wg *sync.WaitGroup) {
 	stopFunc()
 	wg.Wait()
 	log.Println("[Main] Shutdown completed successfully.")
+}
+
+func runListModelsMode(bootstrapAddr string) {
+	err := client.FetchAndListModels(bootstrapAddr)
+	if err != nil {
+		log.Fatalf("[Main] Error listing models: %v", err)
+	}
 }

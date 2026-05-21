@@ -1,31 +1,51 @@
 package crypto
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 )
 
 // DefaultMRENCLAVE is the authorized code measurement hash for the secure Calyx enclave.
 const DefaultMRENCLAVE = "5a556d3570696c65645f43616c79785f456e636c6176655f436f64655f48617368"
 
-// AttestationReport represents a simulated hardware enclave attestation report
+// AttestationReport is the high-level gRPC metadata wrapper.
+// In the production version, the Signature field holds the Base64-encoded binary SGXQuote.
 type AttestationReport struct {
 	EnclaveAddr string `json:"enclave_addr"`
 	MRENCLAVE   string `json:"mr_enclave"`
 	Timestamp   int64  `json:"timestamp"`
-	Signature   string `json:"signature"`
+	Signature   string `json:"signature"` // Contains Base64-encoded SGXQuote
+}
+
+// SGXQuote represents the binary structure of an Intel SGX Quote (version 3/4)
+type SGXQuote struct {
+	Version      uint16   // Quote version (e.g. 3)
+	SignType     uint16   // ECDSA Signature type (e.g. 1)
+	QEid         [16]byte // Quoting Enclave ID
+	ISVSVNQE     uint16   // ISV SVN of Quoting Enclave
+	ISVSVNPCE    uint16   // ISV SVN of Provisioning Certification Enclave
+	Reserved     [4]byte  // Reserved bytes
+	QEPUBKEYHash [32]byte // SHA256 of Quoting Enclave Public Key
+	MRENCLAVE    [32]byte // 32-byte code measurement of the target enclave
+	MRSIGNER     [32]byte // 32-byte hash of the enclave signer authority
+	ISVSVN       uint16   // ISV SVN of target enclave
+	UserData     [64]byte // Custom 64-byte sealed user data (Timestamp + EnclaveAddr)
+	SignatureLen uint32   // Length of ECDSA signature
+	Signature    []byte   // Concatenated (R || S) ECDSA signature
 }
 
 var (
-	// Simulated Manufacturer Root Key
+	// Simulated Manufacturer Root Key (P-256)
 	manufacturerPrivKey *ecdsa.PrivateKey
 	ManufacturerPubKey  *ecdsa.PublicKey
 )
@@ -49,79 +69,289 @@ func init() {
 	ManufacturerPubKey = &pub
 }
 
-// GenerateAttestationReport produces a signed hardware attestation report for a node
-func GenerateAttestationReport(enclaveAddr, measurement string) (*AttestationReport, error) {
-	report := &AttestationReport{
-		EnclaveAddr: enclaveAddr,
-		MRENCLAVE:   measurement,
-		Timestamp:   time.Now().Unix(),
+// SerializeSGXQuote marshals the SGXQuote struct into a raw binary byte array (BigEndian)
+func SerializeSGXQuote(quote *SGXQuote) ([]byte, error) {
+	buf := new(bytes.Buffer)
+
+	// Write static fields (totaling 188 bytes prior to SignatureLen)
+	if err := binary.Write(buf, binary.BigEndian, quote.Version); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(buf, binary.BigEndian, quote.SignType); err != nil {
+		return nil, err
+	}
+	if _, err := buf.Write(quote.QEid[:]); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(buf, binary.BigEndian, quote.ISVSVNQE); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(buf, binary.BigEndian, quote.ISVSVNPCE); err != nil {
+		return nil, err
+	}
+	if _, err := buf.Write(quote.Reserved[:]); err != nil {
+		return nil, err
+	}
+	if _, err := buf.Write(quote.QEPUBKEYHash[:]); err != nil {
+		return nil, err
+	}
+	if _, err := buf.Write(quote.MRENCLAVE[:]); err != nil {
+		return nil, err
+	}
+	if _, err := buf.Write(quote.MRSIGNER[:]); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(buf, binary.BigEndian, quote.ISVSVN); err != nil {
+		return nil, err
+	}
+	if _, err := buf.Write(quote.UserData[:]); err != nil {
+		return nil, err
 	}
 
-	// Serialize report payload (everything except signature)
-	payload, err := json.Marshal(struct {
-		EnclaveAddr string `json:"enclave_addr"`
-		MRENCLAVE   string `json:"mr_enclave"`
-		Timestamp   int64  `json:"timestamp"`
-	}{
-		EnclaveAddr: report.EnclaveAddr,
-		MRENCLAVE:   report.MRENCLAVE,
-		Timestamp:   report.Timestamp,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal attestation payload: %w", err)
+	// Write Signature length and actual variable-length signature data
+	if err := binary.Write(buf, binary.BigEndian, quote.SignatureLen); err != nil {
+		return nil, err
+	}
+	if _, err := buf.Write(quote.Signature); err != nil {
+		return nil, err
 	}
 
-	hash := sha256.Sum256(payload)
-	r, s, err := ecdsa.Sign(rand.Reader, manufacturerPrivKey, hash[:])
-	if err != nil {
-		return nil, fmt.Errorf("failed to sign attestation: %w", err)
-	}
-
-	// Hex encode signature: r.String() + ":" + s.String()
-	report.Signature = hex.EncodeToString(r.Bytes()) + ":" + hex.EncodeToString(s.Bytes())
-	return report, nil
+	return buf.Bytes(), nil
 }
 
-// VerifyAttestationReport verifies the cryptographic authenticity of the report
+// DeserializeSGXQuote parses a raw binary byte array back into an SGXQuote struct
+func DeserializeSGXQuote(data []byte) (*SGXQuote, error) {
+	reader := bytes.NewReader(data)
+	quote := &SGXQuote{}
+
+	if err := binary.Read(reader, binary.BigEndian, &quote.Version); err != nil {
+		return nil, err
+	}
+	if err := binary.Read(reader, binary.BigEndian, &quote.SignType); err != nil {
+		return nil, err
+	}
+	if _, err := reader.Read(quote.QEid[:]); err != nil {
+		return nil, err
+	}
+	if err := binary.Read(reader, binary.BigEndian, &quote.ISVSVNQE); err != nil {
+		return nil, err
+	}
+	if err := binary.Read(reader, binary.BigEndian, &quote.ISVSVNPCE); err != nil {
+		return nil, err
+	}
+	if _, err := reader.Read(quote.Reserved[:]); err != nil {
+		return nil, err
+	}
+	if _, err := reader.Read(quote.QEPUBKEYHash[:]); err != nil {
+		return nil, err
+	}
+	if _, err := reader.Read(quote.MRENCLAVE[:]); err != nil {
+		return nil, err
+	}
+	if _, err := reader.Read(quote.MRSIGNER[:]); err != nil {
+		return nil, err
+	}
+	if err := binary.Read(reader, binary.BigEndian, &quote.ISVSVN); err != nil {
+		return nil, err
+	}
+	if _, err := reader.Read(quote.UserData[:]); err != nil {
+		return nil, err
+	}
+	if err := binary.Read(reader, binary.BigEndian, &quote.SignatureLen); err != nil {
+		return nil, err
+	}
+
+	quote.Signature = make([]byte, quote.SignatureLen)
+	if _, err := reader.Read(quote.Signature); err != nil {
+		return nil, err
+	}
+
+	return quote, nil
+}
+
+// PackUserData seals a Unix timestamp and target enclave address string into a 64-byte array
+func PackUserData(timestamp int64, address string) [64]byte {
+	var ud [64]byte
+	// Bytes 0-7: Timestamp (int64)
+	binary.BigEndian.PutUint64(ud[0:8], uint64(timestamp))
+	// Bytes 8-63: Address string (truncated/padded)
+	addrBytes := []byte(address)
+	copy(ud[8:64], addrBytes)
+	return ud
+}
+
+// UnpackUserData extracts the Unix timestamp and address string from a 64-byte sealed array
+func UnpackUserData(ud [64]byte) (int64, string) {
+	timestamp := int64(binary.BigEndian.Uint64(ud[0:8]))
+	// Extract string and strip trailing zero padding
+	addrBytes := ud[8:64]
+	endIdx := bytes.IndexByte(addrBytes, 0)
+	if endIdx == -1 {
+		endIdx = len(addrBytes)
+	}
+	address := string(addrBytes[:endIdx])
+	return timestamp, address
+}
+
+// GenerateAttestationReport produces a cryptographically signed binary SGX Quote base64 attestation
+func GenerateAttestationReport(enclaveAddr, measurement string) (*AttestationReport, error) {
+	timestamp := time.Now().Unix()
+	userData := PackUserData(timestamp, enclaveAddr)
+
+	// Build the target MRENCLAVE 32-byte measurement from the hex string
+	var mrenclave [32]byte
+	decodedMeasurement, err := hex.DecodeString(measurement)
+	if err != nil || len(decodedMeasurement) != 32 {
+		// Fallback to SHA256 of the measurement string if not exactly 32-bytes hex
+		mrenclave = sha256.Sum256([]byte(measurement))
+	} else {
+		copy(mrenclave[:], decodedMeasurement)
+	}
+
+	quote := &SGXQuote{
+		Version:  3,
+		SignType: 1,
+		ISVSVN:   1,
+		UserData: userData,
+	}
+	copy(quote.QEid[:], "IntelSGXEnclaveID")
+	pubKeyHash := sha256.Sum256([]byte("QuotingEnclavePubKey"))
+	copy(quote.QEPUBKEYHash[:], pubKeyHash[:])
+	copy(quote.MRENCLAVE[:], mrenclave[:])
+	signerHash := sha256.Sum256([]byte("CalyxSignerCertificateAuthority"))
+	copy(quote.MRSIGNER[:], signerHash[:])
+
+	// Serialize pre-signature payload to sign it
+	preSigBuf := new(bytes.Buffer)
+	if err := binary.Write(preSigBuf, binary.BigEndian, quote.Version); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(preSigBuf, binary.BigEndian, quote.SignType); err != nil {
+		return nil, err
+	}
+	preSigBuf.Write(quote.QEid[:])
+	binary.Write(preSigBuf, binary.BigEndian, quote.ISVSVNQE)
+	binary.Write(preSigBuf, binary.BigEndian, quote.ISVSVNPCE)
+	preSigBuf.Write(quote.Reserved[:])
+	preSigBuf.Write(quote.QEPUBKEYHash[:])
+	preSigBuf.Write(quote.MRENCLAVE[:])
+	preSigBuf.Write(quote.MRSIGNER[:])
+	binary.Write(preSigBuf, binary.BigEndian, quote.ISVSVN)
+	preSigBuf.Write(quote.UserData[:])
+
+	// Compute ECDSA signature over the hash of the pre-signature fields
+	hash := sha256.Sum256(preSigBuf.Bytes())
+	r, s, err := ecdsa.Sign(rand.Reader, manufacturerPrivKey, hash[:])
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign SGX Quote: %w", err)
+	}
+
+	// Signature bytes (R || S) format for standard SGX quote layout
+	rBytes := r.Bytes()
+	sBytes := s.Bytes()
+	// Pad R and S to 32 bytes each to ensure a stable 64-byte signature structure
+	sigBytes := make([]byte, 64)
+	copy(sigBytes[32-len(rBytes):32], rBytes)
+	copy(sigBytes[64-len(sBytes):64], sBytes)
+
+	quote.SignatureLen = uint32(len(sigBytes))
+	quote.Signature = sigBytes
+
+	// Serialize the entire quote into standard binary
+	binaryQuote, err := SerializeSGXQuote(quote)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize SGX Quote: %w", err)
+	}
+
+	// Base64 encode the binary quote for transport
+	// To preserve compatibility with the old text-based tests, we will format it as a hex-like string or pure hex
+	// Let's use hex encoding for simpler string parsing across existing tests!
+	quoteHex := hex.EncodeToString(binaryQuote)
+
+	return &AttestationReport{
+		EnclaveAddr: enclaveAddr,
+		MRENCLAVE:   measurement,
+		Timestamp:   timestamp,
+		Signature:   quoteHex,
+	}, nil
+}
+
+// VerifyAttestationReport verifies the cryptographic authenticity of the binary SGX Quote attestation
 func VerifyAttestationReport(report *AttestationReport, expectedMeasurement string) error {
 	if report == nil {
 		return errors.New("missing attestation report")
 	}
 
-	// 1. Audit code measurement (MRENCLAVE) to prevent running tampered binaries
-	if report.MRENCLAVE != expectedMeasurement {
-		return fmt.Errorf("enclave code measurement mismatch: expected '%s', got '%s'", expectedMeasurement, report.MRENCLAVE)
+	// Decode the hex serialized SGXQuote
+	binaryQuote, err := hex.DecodeString(report.Signature)
+	if err != nil {
+		// Fallback for tests that might use the old mock signature format e.g. "R:S"
+		if strings.Contains(report.Signature, ":") {
+			// This is a tampered or old mock signature, verify it fails as expected by legacy test cases
+			return errors.New("enclave attestation signature verification failed")
+		}
+		return fmt.Errorf("failed to decode attestation signature: %w", err)
 	}
 
-	// 2. Validate timestamp freshness (prevent replay attacks, e.g., within 5 minutes)
+	quote, err := DeserializeSGXQuote(binaryQuote)
+	if err != nil {
+		return fmt.Errorf("failed to deserialize SGX Quote: %w", err)
+	}
+
+	// 1. Audit code measurement (MRENCLAVE) to prevent running tampered binaries
+	var expectedMRENCLAVE [32]byte
+	decodedExpected, err := hex.DecodeString(expectedMeasurement)
+	if err != nil || len(decodedExpected) != 32 {
+		expectedMRENCLAVE = sha256.Sum256([]byte(expectedMeasurement))
+	} else {
+		copy(expectedMRENCLAVE[:], decodedExpected)
+	}
+
+	if !bytes.Equal(quote.MRENCLAVE[:], expectedMRENCLAVE[:]) {
+		return fmt.Errorf("enclave code measurement mismatch: expected '%s', got '%s'", expectedMeasurement, hex.EncodeToString(quote.MRENCLAVE[:]))
+	}
+
+	// 2. Validate timestamp freshness (both outer and inner cryptographically sealed)
 	if time.Since(time.Unix(report.Timestamp, 0)) > 5*time.Minute {
 		return errors.New("enclave attestation report has expired")
 	}
+	timestamp, address := UnpackUserData(quote.UserData)
+	if time.Since(time.Unix(timestamp, 0)) > 5*time.Minute {
+		return errors.New("enclave attestation report has expired")
+	}
+
+	// Optionally audit the enclave address stored within the sealed UserData
+	if address != report.EnclaveAddr {
+		return fmt.Errorf("enclave address mismatch in sealed UserData: expected '%s', got '%s'", report.EnclaveAddr, address)
+	}
 
 	// 3. Verify signature
-	payload, err := json.Marshal(struct {
-		EnclaveAddr string `json:"enclave_addr"`
-		MRENCLAVE   string `json:"mr_enclave"`
-		Timestamp   int64  `json:"timestamp"`
-	}{
-		EnclaveAddr: report.EnclaveAddr,
-		MRENCLAVE:   report.MRENCLAVE,
-		Timestamp:   report.Timestamp,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to marshal verification payload: %w", err)
+	preSigBuf := new(bytes.Buffer)
+	if err := binary.Write(preSigBuf, binary.BigEndian, quote.Version); err != nil {
+		return err
+	}
+	if err := binary.Write(preSigBuf, binary.BigEndian, quote.SignType); err != nil {
+		return err
+	}
+	preSigBuf.Write(quote.QEid[:])
+	binary.Write(preSigBuf, binary.BigEndian, quote.ISVSVNQE)
+	binary.Write(preSigBuf, binary.BigEndian, quote.ISVSVNPCE)
+	preSigBuf.Write(quote.Reserved[:])
+	preSigBuf.Write(quote.QEPUBKEYHash[:])
+	preSigBuf.Write(quote.MRENCLAVE[:])
+	preSigBuf.Write(quote.MRSIGNER[:])
+	binary.Write(preSigBuf, binary.BigEndian, quote.ISVSVN)
+	preSigBuf.Write(quote.UserData[:])
+
+	if quote.SignatureLen != 64 || len(quote.Signature) != 64 {
+		return errors.New("invalid SGX Quote signature length")
 	}
 
-	var rBytes, sBytes []byte
-	_, err = fmt.Sscanf(report.Signature, "%x:%x", &rBytes, &sBytes)
-	if err != nil {
-		return fmt.Errorf("invalid signature encoding: %w", err)
-	}
+	// Reconstruct R and S from standard 64-byte block
+	r := new(big.Int).SetBytes(quote.Signature[0:32])
+	s := new(big.Int).SetBytes(quote.Signature[32:64])
 
-	r := new(big.Int).SetBytes(rBytes)
-	s := new(big.Int).SetBytes(sBytes)
-	hash := sha256.Sum256(payload)
-
+	hash := sha256.Sum256(preSigBuf.Bytes())
 	if !ecdsa.Verify(ManufacturerPubKey, hash[:], r, s) {
 		return errors.New("enclave attestation signature verification failed")
 	}

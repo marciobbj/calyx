@@ -62,7 +62,7 @@ func TestDecentralizedDHTAndSecurePipeline(t *testing.T) {
 	// solve Proof-of-Work difficulty 2, and process multi-head self-attention.
 	taskID := fmt.Sprintf("decentralized_e2e_dht_%d", time.Now().Unix())
 	t.Logf("[Test] Executing E2E Client with Kademlia DHT routing and mTLS verification (Task: %s)...", taskID)
-	
+
 	err = client.RunClient(bootstrapAddr, 1, 8, taskID, 2, &network, 0.0, "")
 	if err != nil {
 		t.Fatalf("Decentralized P2P pipeline failed: %v", err)

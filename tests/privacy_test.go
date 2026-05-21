@@ -33,7 +33,7 @@ func TestDifferentialPrivacyNoiseBounds(t *testing.T) {
 		if len(perturbed) != len(original) {
 			t.Fatalf("perturbed size mismatch: expected %d, got %d", len(original), len(perturbed))
 		}
-		
+
 		// Accumulate difference on first dimension to measure variance
 		diff := perturbed[0] - original[0]
 		sumDiff += diff
@@ -57,7 +57,7 @@ func TestDifferentialPrivacyNoiseBounds(t *testing.T) {
 
 	// Verify that with noise, the attention forward pass remains stable
 	transLayer := engine.NewTransformerLayer(4)
-	
+
 	// Create original and perturbed outputs
 	originalInput := make([]float64, 40)
 	for i := 0; i < 40; i++ {
@@ -128,7 +128,7 @@ func TestTEEAttestationCryptographicAudit(t *testing.T) {
 		Timestamp:   time.Now().Add(-10 * time.Minute).Unix(),
 		Signature:   report.Signature, // uses valid signature of valid fields, but old timestamp
 	}
-	
+
 	err = crypto.VerifyAttestationReport(expiredReport, measurement)
 	if err == nil {
 		t.Error("Expected verification to fail for expired report timestamp, but it succeeded")

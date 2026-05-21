@@ -22,6 +22,12 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+var (
+	WeightsPath = ""
+	ModelID     = "google/gemma-2b"
+	StunServer  = ""
+)
+
 // KVCacheEntry represents a thread-safe KV cache entry for a single task session
 type KVCacheEntry struct {
 	mu           sync.Mutex
@@ -58,13 +64,28 @@ func NewServer(address string, startLayer, endLayer int32, ttl time.Duration, po
 		}
 	}
 
+	transformerLayer := engine.NewTransformerLayer(4) // default hiddenDim is 4
+	if WeightsPath != "" {
+		if err := engine.EnsureWeightsExist(WeightsPath, 4); err != nil {
+			log.Printf("[Server Layers %d-%d] Warning: failed to ensure weights file: %v. Using default identity weights.", startLayer, endLayer, err)
+		} else {
+			loaded, err := engine.LoadWeights(WeightsPath)
+			if err != nil {
+				log.Printf("[Server Layers %d-%d] Warning: failed to load physical weights from %s: %v. Using default identity weights.", startLayer, endLayer, WeightsPath, err)
+			} else {
+				transformerLayer = loaded
+				log.Printf("[Server Layers %d-%d] Engine: Successfully loaded physical model weights from %s!", startLayer, endLayer, WeightsPath)
+			}
+		}
+	}
+
 	srv := &Server{
 		address:           address,
 		startLayer:        startLayer,
 		endLayer:          endLayer,
 		ttl:               ttl,
 		powDifficulty:     powDifficulty,
-		transformer:       engine.NewTransformerLayer(4), // default hiddenDim is 4
+		transformer:       transformerLayer,
 		tlsCert:           cert,
 		dht:               dht.NewKademliaDHT(address, network),
 		teeEnclave:        teeEnclave,
@@ -312,7 +333,9 @@ func (s *Server) Register(bootstrapAddr string) error {
 	defer conn.Close()
 
 	client := pb.NewBootstrapServiceClient(conn)
-	resp, err := client.RegisterNode(context.Background(), &pb.RegisterRequest{
+	md := metadata.Pairs("model-id", ModelID)
+	ctx := metadata.NewOutgoingContext(context.Background(), md)
+	resp, err := client.RegisterNode(ctx, &pb.RegisterRequest{
 		Address:    s.address,
 		StartLayer: s.startLayer,
 		EndLayer:   s.endLayer,
@@ -334,6 +357,16 @@ func StartServer(ctx context.Context, bootstrapAddr string, startLayer, endLayer
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen on %s: %w", addr, err)
 	}
+
+	// Dynamically query external IP mapped via STUN for WAN NAT traversal diagnostics
+	go func() {
+		extAddr, err := crypto.GetExternalIPMappedAddress(StunServer)
+		if err != nil {
+			log.Printf("[Server Layers %d-%d] NAT Discovery: STUN query skipped/unavailable: %v (operating on local network)", startLayer, endLayer, err)
+		} else {
+			log.Printf("[Server Layers %d-%d] NAT Discovery (Success): Node public-facing mapped address is %s", startLayer, endLayer, extAddr)
+		}
+	}()
 
 	// 1. Generate key pair and dynamic mTLS certificate
 	cert, err := crypto.GenerateKeyPairAndCert()
