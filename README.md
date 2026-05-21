@@ -1,8 +1,6 @@
 # Calyx
 
-Calyx is an ultra-lightweight, decentralized P2P network and runtime engine written in Go, inspired by the architecture of the **Petals** P2P framework. It enables low-spec client hardware to execute massive Large Language Model (LLM) inference by sharding transformer layer blocks across a collaborative network of consumer-grade servers.
-
-By employing **Pipeline Parallelism**, intermediate token activations are streamed node-by-node using high-performance bidirectional gRPC streams, while remote **KV Caches** are dynamically updated and kept resident on supporting servers to bypass redundant computation.
+Calyx is an ultra-lightweight, decentralized P2P network and runtime engine written in Go, inspired by the architecture of the **Petals** P2P framework. It enables low-spec client hardware to execute local Large Language Model (LLM) inference by sharding transformer layer blocks across a collaborative network of consumer-grade servers. By employing **Pipeline Parallelism**, intermediate token activations are streamed node-by-node using high-performance bidirectional gRPC streams, while remote **KV Caches** are dynamically updated and kept resident on supporting servers to bypass redundant computation.
 
 ---
 
