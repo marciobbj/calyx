@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net"
 	"sync"
 	"time"
@@ -74,6 +75,12 @@ func (s *Server) Forward(stream pb.P2PService_ForwardServer) error {
 		tensor := req.Tensor
 		if tensor == nil {
 			return errors.New("received nil tensor")
+		}
+
+		// Run security sanitization and bounds checking
+		if err := s.sanitizeTensor(tensor); err != nil {
+			log.Printf("[Server Layers %d-%d] Security Alert: rejected malicious tensor from client: %v", s.startLayer, s.endLayer, err)
+			return fmt.Errorf("security violation: %w", err)
 		}
 
 		// 1. Retrieve or update KV Cache
@@ -294,3 +301,45 @@ func (s *Server) startTTLWorker(ctx context.Context) {
 		}
 	}
 }
+
+// sanitizeTensor validates shape invariants, checks for NaN/Infinity, and clamps floats to a safe boundary
+func (s *Server) sanitizeTensor(tensor *pb.Tensor) error {
+	if tensor == nil {
+		return errors.New("received nil tensor")
+	}
+
+	// 1. Verify shape invariants
+	expectedSize := int64(1)
+	if len(tensor.Shape) == 0 {
+		return errors.New("tensor shape cannot be empty")
+	}
+	for _, dim := range tensor.Shape {
+		if dim <= 0 {
+			return fmt.Errorf("invalid tensor dimension size: %d", dim)
+		}
+		expectedSize *= dim
+	}
+	if expectedSize != int64(len(tensor.Data)) {
+		return fmt.Errorf("tensor shape dimensions mismatch actual data length: expected %d, got %d", expectedSize, len(tensor.Data))
+	}
+
+	// 2. Scan and clamp float values
+	for i, val := range tensor.Data {
+		if math.IsNaN(val) {
+			return fmt.Errorf("malicious tensor data: detected NaN value at index %d", i)
+		}
+		if math.IsInf(val, 0) {
+			return fmt.Errorf("malicious tensor data: detected Infinity value at index %d", i)
+		}
+		
+		// Clamp to a safe physical boundary to prevent numerical overflow exploits
+		if val > 100.0 {
+			tensor.Data[i] = 100.0
+		} else if val < -100.0 {
+			tensor.Data[i] = -100.0
+		}
+	}
+
+	return nil
+}
+

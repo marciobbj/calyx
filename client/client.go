@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strings"
+	"sync"
 	"time"
 
 	pb "calyx/proto"
@@ -63,6 +65,7 @@ func RunClient(bootstrapAddr string, startLayer, endLayer int32, taskID string) 
 	// Channel to signal when all responses are received
 	doneChan := make(chan struct{})
 	var streamErr error
+	var sentInputs sync.Map
 
 	// 4. Start receiving thread
 	go func() {
@@ -74,6 +77,23 @@ func RunClient(bootstrapAddr string, startLayer, endLayer int32, taskID string) 
 			}
 			if err != nil {
 				streamErr = fmt.Errorf("error reading from server stream: %w", err)
+				return
+			}
+
+			// Extract original token ID
+			parts := strings.Split(resp.Tensor.Id, "_processed_")
+			baseID := parts[0]
+
+			val, ok := sentInputs.Load(baseID)
+			if !ok {
+				streamErr = fmt.Errorf("security violation: received response for unregistered tensor ID %s", baseID)
+				return
+			}
+			inputData := val.([]float64)
+
+			if err := verifyComputation(inputData, resp.Tensor.Data); err != nil {
+				log.Printf("[Client] Security Alert: computation verification failed for tensor %s: %v", resp.Tensor.Id, err)
+				streamErr = fmt.Errorf("security violation: %w", err)
 				return
 			}
 
@@ -101,6 +121,8 @@ func RunClient(bootstrapAddr string, startLayer, endLayer int32, taskID string) 
 			Route:             route,
 			CurrentRouteIndex: 0, // Starts at index 0 of route
 		}
+
+		sentInputs.Store(tensor.Id, data)
 
 		log.Printf("[Client] -> Dispatching Tensor '%s' [Values: %.1f] to the pipeline...", tensor.Id, data)
 		if err := p2pStream.Send(req); err != nil {
@@ -133,3 +155,40 @@ func formatRouteChain(route []string) string {
 	}
 	return res
 }
+
+// verifyComputation checks that the server nodes processed activations mathematically
+// and didn't return zeroed-out data, static flat values, or sudden explosions/erasures.
+func verifyComputation(input []float64, output []float64) error {
+	if len(output) != len(input) {
+		return fmt.Errorf("computation verification failed: size mismatch (input: %d, output: %d)", len(input), len(output))
+	}
+
+	allZeros := true
+	allIdentical := true
+	firstVal := output[0]
+
+	for i, val := range output {
+		if val != 0.0 {
+			allZeros = false
+		}
+		if val != firstVal {
+			allIdentical = false
+		}
+
+		// Activations should not undergo explosive math changes or erasure (decay limit check)
+		diff := val - input[i]
+		if diff > 10.0 || diff < -10.0 {
+			return fmt.Errorf("computation verification failed: massive activation delta detected at index %d (input: %f, output: %f)", i, input[i], val)
+		}
+	}
+
+	if allZeros {
+		return fmt.Errorf("computation verification failed: received all-zero activations (potential lazy or offline server)")
+	}
+	if allIdentical && len(output) > 1 {
+		return fmt.Errorf("computation verification failed: received identical static activations (potential lazy or compromised server)")
+	}
+
+	return nil
+}
+

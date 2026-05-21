@@ -10,6 +10,24 @@ This is a decentralized P2P network developed in Go that replicates the fundamen
 2. **Decentralized KV Cache**: Each server node retains keys and values for its assigned subset of layers under a thread-safe task-indexed cache, avoiding recomputations for subsequent tokens.
 3. **Dynamic TTL Cache Eviction**: Background workers in each server monitor idle tasks and automatically purge expired KV Caches, freeing up system memory.
 4. **Decentralized Route Planning**: A mock DHT (Bootstrap Node) keeps track of active nodes and registers layer capacities, offering a routing API `FindRoute(startLayer, endLayer)` to formulate the optimal execution path.
+5. **Bi-directional Security & Trust**: Features built-in hardware protection for servers (sanitization, bounds checking) and computation verification for clients (trapdoor decay heuristics) to prevent resource exploitation or compute manipulation.
+
+---
+
+## Bi-Directional Security Safeguards
+
+Calyx implements a robust, bi-directional security architecture to protect all participants in the untrusted P2P network:
+
+### Server-Side Protections (Against Malicious Clients)
+* **IEEE 754 NaN/Infinity Scanners**: The server parses incoming tensors and rejects any inputs containing `NaN` or `Infinity` immediately, preventing numerical overflows or division-by-zero crashes.
+* **Shape Invariant Validation**: Asserts that the product of the dimensions in the `Shape` attribute perfectly matches the actual size of the raw float slice (`len(data)`) before allocating memory.
+* **Operational Physical Clamping**: Restricts float values to a safe physical boundary of `[-100.0, 100.0]`, guarding servers from numerical explosion exploits.
+
+### Client-Side Protections (Against Malicious/Compromised Servers)
+* **Computation Decay & Offset Checks**: Clients register dispatched activations in a thread-safe map and verify that received intermediate weights have not undergone sudden erasures or massive physical changes.
+* **Lazy Computation Trapdoor**: Rejects all-zero activation slices (lazy server detections) and identical flat static arrays (indicating compromised nodes returning dummy default vectors).
+
+*For a detailed look at the complete security threat model, mutual TLS designs, and mitigation blueprints, see the [Security Architecture Document](file:///home/io/workspace/connect/security_architecture.md).*
 
 ---
 
