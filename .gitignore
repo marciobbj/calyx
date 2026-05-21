@@ -1,0 +1,27 @@
+# Compiled binaries
+bin/
+connect
+
+# Test logs directory generated during E2E binary runs
+test_logs/
+
+# Go testing binaries and coverage reports
+*.test
+*.out
+*.prof
+
+# Dependency directories
+vendor/
+
+# Operating System files
+.DS_Store
+Thumbs.db
+
+# IDE and Editor configurations
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

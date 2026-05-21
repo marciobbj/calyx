@@ -37,6 +37,6 @@ vet:
 
 # Clean build artifacts
 clean:
-	@echo "==> Cleaning build artifacts..."
-	rm -rf bin
+	@echo "==> Cleaning build artifacts and logs..."
+	rm -rf bin test_logs
 	@echo "==> Clean completed!"

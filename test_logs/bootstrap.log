@@ -1,6 +1,0 @@
-06:36:26.493760 [Main] Starting Bootstrap Node in standalone mode...
-06:36:26.494907 [Bootstrap] gRPC server started on localhost:50100
-06:36:26.997307 [Bootstrap] Registered: localhost:50101 (Layers 1-4)
-06:36:26.997350 [Bootstrap] Registered: localhost:50102 (Layers 5-8)
-06:36:28.498943 [Bootstrap] Route search for Layers 1-8
-06:36:28.498957 [Bootstrap] Route found: [localhost:50101 localhost:50102]
