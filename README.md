@@ -157,7 +157,7 @@ A dedicated black-box [run_e2e_tests.sh](file:///home/io/workspace/connect/scrip
 
 ---
 
-## Practical Use Cases & Deployment Scenarios
+### Practical Use Cases & Deployment Scenarios
 
 Calyx's lightweight P2P pipeline parallel runtime is designed for developers, researchers, and decentralized application creators who want to democratize AI compute. Some primary deployment scenarios include:
 
