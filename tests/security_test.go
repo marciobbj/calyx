@@ -29,6 +29,9 @@ type MaliciousServer struct {
 
 // Forward implements the stream processing loop returning faulty data
 func (m *MaliciousServer) Forward(stream pb.P2PService_ForwardServer) error {
+	// Send an empty header to prevent the client's Header() call from deadlocking the stream
+	_ = stream.SendHeader(metadata.MD{})
+
 	for {
 		req, err := stream.Recv()
 		if err == io.EOF {
@@ -299,7 +302,7 @@ func TestClientDetectsPoisonedServerComputation(t *testing.T) {
 
 			// 3. Run Client requesting layers 1 to 8
 			taskID := fmt.Sprintf("malicious_client_test_%s_%d", mode, time.Now().Unix())
-			err = client.RunClient(bootstrapAddr, 1, 8, taskID, 2, nil)
+			err = client.RunClient(bootstrapAddr, 1, 8, taskID, 2, nil, 0.0, "")
 			if err == nil {
 				t.Errorf("Expected Client to detect and reject malicious server (%s) computation, but it succeeded", mode)
 			} else {
@@ -311,5 +314,5 @@ func TestClientDetectsPoisonedServerComputation(t *testing.T) {
 
 // startNormalServer is a helper that starts a normal server node
 func startNormalServer(ctx context.Context, bootstrapAddr, addr string, wg *sync.WaitGroup) (*grpc.Server, error) {
-	return server.StartServer(ctx, bootstrapAddr, 1, 4, addr, 5*time.Second, 2, nil, wg)
+	return server.StartServer(ctx, bootstrapAddr, 1, 4, addr, 5*time.Second, 2, nil, wg, false)
 }

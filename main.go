@@ -13,6 +13,7 @@ import (
 
 	"calyx/bootstrap"
 	"calyx/client"
+	"calyx/crypto"
 	"calyx/server"
 )
 
@@ -26,6 +27,8 @@ func main() {
 	ttlFlag := flag.Duration("ttl", 10*time.Minute, "KV Cache TTL (e.g. 10m, 5s)")
 	taskIDFlag := flag.String("task", "task_calyx_go", "Unique task identifier")
 	difficultyFlag := flag.Int("difficulty", 2, "Hashcash Proof-of-Work puzzle difficulty (number of leading zeros)")
+	dpNoiseFlag := flag.Float64("dp-noise", 0.001, "Standard deviation of Differential Privacy Gaussian noise (0.0 to disable)")
+	teeEnclaveFlag := flag.Bool("tee-enclave", true, "Simulate secure hardware enclaves (Intel SGX / AMD SEV)")
 
 	flag.Parse()
 
@@ -36,11 +39,11 @@ func main() {
 	case "bootstrap":
 		runBootstrapMode(*addrFlag, *bootstrapAddrFlag)
 	case "server":
-		runServerMode(*addrFlag, *bootstrapAddrFlag, int32(*startLayerFlag), int32(*endLayerFlag), *ttlFlag, *difficultyFlag)
+		runServerMode(*addrFlag, *bootstrapAddrFlag, int32(*startLayerFlag), int32(*endLayerFlag), *ttlFlag, *difficultyFlag, *teeEnclaveFlag)
 	case "client":
-		runClientMode(*bootstrapAddrFlag, int32(*startLayerFlag), int32(*endLayerFlag), *taskIDFlag, *difficultyFlag)
+		runClientMode(*bootstrapAddrFlag, int32(*startLayerFlag), int32(*endLayerFlag), *taskIDFlag, *difficultyFlag, *dpNoiseFlag)
 	case "demo":
-		runAutomatedDemo(*ttlFlag, *difficultyFlag)
+		runAutomatedDemo(*ttlFlag, *difficultyFlag, *dpNoiseFlag, *teeEnclaveFlag)
 	default:
 		fmt.Printf("Unknown mode: %s. Use -mode with 'bootstrap', 'server', 'client', or 'demo'\n", *modeFlag)
 		os.Exit(1)
@@ -63,16 +66,16 @@ func runBootstrapMode(addr, bootstrapAddr string) {
 	}, &wg)
 }
 
-func runServerMode(addr, bootstrapAddr string, startLayer, endLayer int32, ttl time.Duration, powDifficulty int) {
+func runServerMode(addr, bootstrapAddr string, startLayer, endLayer int32, ttl time.Duration, powDifficulty int, teeEnclave bool) {
 	if addr == "" {
 		log.Fatal("[Main] Error: -addr parameter is required in 'server' mode (e.g. -addr=localhost:50051)")
 	}
-	log.Printf("[Main] Starting standalone Server Node (Layers %d-%d) on %s with Hashcash Difficulty: %d...", startLayer, endLayer, addr, powDifficulty)
+	log.Printf("[Main] Starting standalone Server Node (Layers %d-%d) on %s with Hashcash Difficulty: %d, TEE Enclave: %t...", startLayer, endLayer, addr, powDifficulty, teeEnclave)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 
-	srv, err := server.StartServer(ctx, bootstrapAddr, startLayer, endLayer, addr, ttl, powDifficulty, nil, &wg)
+	srv, err := server.StartServer(ctx, bootstrapAddr, startLayer, endLayer, addr, ttl, powDifficulty, nil, &wg, teeEnclave)
 	if err != nil {
 		cancel()
 		log.Fatalf("[Main] Failed to start Server: %v", err)
@@ -84,15 +87,15 @@ func runServerMode(addr, bootstrapAddr string, startLayer, endLayer int32, ttl t
 	}, &wg)
 }
 
-func runClientMode(bootstrapAddr string, startLayer, endLayer int32, taskID string, powDifficulty int) {
-	log.Printf("[Main] Starting standalone Client Node...")
-	err := client.RunClient(bootstrapAddr, startLayer, endLayer, taskID, powDifficulty, nil)
+func runClientMode(bootstrapAddr string, startLayer, endLayer int32, taskID string, powDifficulty int, dpNoise float64) {
+	log.Printf("[Main] Starting standalone Client Node with DP noise standard deviation: %f...", dpNoise)
+	err := client.RunClient(bootstrapAddr, startLayer, endLayer, taskID, powDifficulty, nil, dpNoise, "")
 	if err != nil {
 		log.Fatalf("[Main] Error running Client: %v", err)
 	}
 }
 
-func runAutomatedDemo(customTTL time.Duration, powDifficulty int) {
+func runAutomatedDemo(customTTL time.Duration, powDifficulty int, dpNoise float64, teeEnclave bool) {
 	log.Println("================================================================================")
 	log.Println("   CALYX DECENTRALIZED P2P ARCHITECTURE - AUTOMATED DEMO IN GO")
 	log.Println("================================================================================")
@@ -121,15 +124,15 @@ func runAutomatedDemo(customTTL time.Duration, powDifficulty int) {
 	time.Sleep(300 * time.Millisecond) // Give standard TCP listener time to bind
 
 	// 2. Start Server Node 1 (Layers 1-4)
-	log.Printf("[Main] 2. Initializing Server 1 (Layers 1-4) on %s...", server1Addr)
-	sSrv1, err := server.StartServer(ctx, bootstrapAddr, 1, 4, server1Addr, demoTTL, powDifficulty, nil, &wg)
+	log.Printf("[Main] 2. Initializing Server 1 (Layers 1-4) on %s (TEE: %t)...", server1Addr, teeEnclave)
+	sSrv1, err := server.StartServer(ctx, bootstrapAddr, 1, 4, server1Addr, demoTTL, powDifficulty, nil, &wg, teeEnclave)
 	if err != nil {
 		log.Fatalf("[Main] Failed to start Server 1 for Demo: %v", err)
 	}
 
 	// 3. Start Server Node 2 (Layers 5-8)
-	log.Printf("[Main] 3. Initializing Server 2 (Layers 5-8) on %s...", server2Addr)
-	sSrv2, err := server.StartServer(ctx, bootstrapAddr, 5, 8, server2Addr, demoTTL, powDifficulty, nil, &wg)
+	log.Printf("[Main] 3. Initializing Server 2 (Layers 5-8) on %s (TEE: %t)...", server2Addr, teeEnclave)
+	sSrv2, err := server.StartServer(ctx, bootstrapAddr, 5, 8, server2Addr, demoTTL, powDifficulty, nil, &wg, teeEnclave)
 	if err != nil {
 		log.Fatalf("[Main] Failed to start Server 2 for Demo: %v", err)
 	}
@@ -137,9 +140,14 @@ func runAutomatedDemo(customTTL time.Duration, powDifficulty int) {
 
 	// 4. Start Client Pipeline execution
 	taskID := fmt.Sprintf("task_demo_%d", time.Now().Unix())
-	log.Printf("[Main] 4. Running Client Node to process layers 1 to 8 with TaskID '%s'", taskID)
+	log.Printf("[Main] 4. Running Client Node to process layers 1 to 8 with TaskID '%s' (DP Noise: %f)", taskID, dpNoise)
 
-	err = client.RunClient(bootstrapAddr, 1, 8, taskID, powDifficulty, nil)
+	expectedMRENCLAVE := ""
+	if teeEnclave {
+		expectedMRENCLAVE = crypto.DefaultMRENCLAVE
+	}
+
+	err = client.RunClient(bootstrapAddr, 1, 8, taskID, powDifficulty, nil, dpNoise, expectedMRENCLAVE)
 	if err != nil {
 		log.Printf("[Main] Error running Client in Demo: %v", err)
 	}

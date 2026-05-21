@@ -41,7 +41,7 @@ func TestDecentralizedDHTAndSecurePipeline(t *testing.T) {
 
 	// 3. Start Server 1 (Layers 1-4) with shared Kademlia network sync.Map
 	t.Logf("[Test] Starting Server 1 on %s...", server1Addr)
-	sSrv1, err := server.StartServer(ctx, bootstrapAddr, 1, 4, server1Addr, 5*time.Second, 2, &network, &wg)
+	sSrv1, err := server.StartServer(ctx, bootstrapAddr, 1, 4, server1Addr, 5*time.Second, 2, &network, &wg, false)
 	if err != nil {
 		t.Fatalf("Failed to start Server 1: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestDecentralizedDHTAndSecurePipeline(t *testing.T) {
 
 	// 4. Start Server 2 (Layers 5-8) with shared Kademlia network sync.Map
 	t.Logf("[Test] Starting Server 2 on %s...", server2Addr)
-	sSrv2, err := server.StartServer(ctx, bootstrapAddr, 5, 8, server2Addr, 5*time.Second, 2, &network, &wg)
+	sSrv2, err := server.StartServer(ctx, bootstrapAddr, 5, 8, server2Addr, 5*time.Second, 2, &network, &wg, false)
 	if err != nil {
 		t.Fatalf("Failed to start Server 2: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestDecentralizedDHTAndSecurePipeline(t *testing.T) {
 	taskID := fmt.Sprintf("decentralized_e2e_dht_%d", time.Now().Unix())
 	t.Logf("[Test] Executing E2E Client with Kademlia DHT routing and mTLS verification (Task: %s)...", taskID)
 	
-	err = client.RunClient(bootstrapAddr, 1, 8, taskID, 2, &network)
+	err = client.RunClient(bootstrapAddr, 1, 8, taskID, 2, &network, 0.0, "")
 	if err != nil {
 		t.Fatalf("Decentralized P2P pipeline failed: %v", err)
 	}

@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -18,7 +19,7 @@ import (
 )
 
 // RunClient runs the Client node scenario, querying the bootstrap and processing the pipeline
-func RunClient(bootstrapAddr string, startLayer, endLayer int32, taskID string, powDifficulty int, network *sync.Map) error {
+func RunClient(bootstrapAddr string, startLayer, endLayer int32, taskID string, powDifficulty int, network *sync.Map, dpNoise float64, expectedMRENCLAVE string) error {
 	log.Printf("[Client] Initializing client node (weak machine)...")
 
 	// 1. Generate key pair and dynamic client certificate
@@ -108,6 +109,28 @@ func RunClient(bootstrapAddr string, startLayer, endLayer int32, taskID string, 
 		return fmt.Errorf("failed to open P2P forward stream: %w", err)
 	}
 
+	// Retrieve and verify the server's simulated TEE attestation report from metadata headers
+	header, hErr := p2pStream.Header()
+	if hErr != nil {
+		return fmt.Errorf("failed to retrieve server TEE headers: %w", hErr)
+	}
+	if attestVals := header.Get("enclave-attestation"); len(attestVals) > 0 {
+		var report crypto.AttestationReport
+		if jsonErr := json.Unmarshal([]byte(attestVals[0]), &report); jsonErr != nil {
+			return fmt.Errorf("failed to unmarshal TEE attestation report: %w", jsonErr)
+		}
+		mrenclave := expectedMRENCLAVE
+		if mrenclave == "" {
+			mrenclave = crypto.DefaultMRENCLAVE
+		}
+		if vErr := crypto.VerifyAttestationReport(&report, mrenclave); vErr != nil {
+			return fmt.Errorf("security violation: TEE attestation report verification failed: %w", vErr)
+		}
+		log.Printf("[Client] TEE Audit (Success): Server node %s enclave report verified cryptographically (MRENCLAVE: %s)", firstNodeAddr, report.MRENCLAVE)
+	} else if expectedMRENCLAVE != "" {
+		return fmt.Errorf("security violation: server did not provide a TEE attestation report but one was expected")
+	}
+
 	// Channel to signal when all responses are received
 	doneChan := make(chan struct{})
 	var streamErr error
@@ -155,6 +178,15 @@ func RunClient(bootstrapAddr string, startLayer, endLayer int32, taskID string, 
 		// Mock token embeddings representation (each token is a 4-dimensional vector)
 		data := []float64{float64(t) * 1.5, float64(t) * -0.5, float64(t) * 2.0, float64(t) * 0.8}
 
+		// Save a copy/reference of original clean data for computation verification
+		cleanData := data
+
+		// Inject Differential Privacy noise if configured
+		if dpNoise > 0.0 {
+			data = crypto.AddGaussianNoise(cleanData, dpNoise)
+			log.Printf("[Client] DP: Injected Gaussian noise (stdDev: %f) into local embeddings prior to transmission", dpNoise)
+		}
+
 		tensor := &pb.Tensor{
 			Id:     fmt.Sprintf("token_%d", t),
 			TaskId: taskID,
@@ -168,7 +200,7 @@ func RunClient(bootstrapAddr string, startLayer, endLayer int32, taskID string, 
 			CurrentRouteIndex: 0, // Starts at index 0 of route
 		}
 
-		sentInputs.Store(tensor.Id, data)
+		sentInputs.Store(tensor.Id, cleanData)
 
 		log.Printf("[Client] -> Dispatching Tensor '%s' [Values: %.1f] to the pipeline...", tensor.Id, data)
 		if err := p2pStream.Send(req); err != nil {

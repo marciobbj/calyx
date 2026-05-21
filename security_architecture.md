@@ -92,33 +92,3 @@ sequenceDiagram
         Server->>Server: Evict expired caches / LRU clean
     end
 ```
-
----
-
-## 4. Current Go Implementation Status
-
-We have implemented and verified the core security layers detailed in this blueprint:
-
-### Server-Side Implementation (`server/server.go`)
-* **`sanitizeTensor(tensor *pb.Tensor) error`**:
-  * Scans incoming shape arrays to assert no negative or zero dimensions.
-  * Multiplies dimensions and verifies the product is mathematically equivalent to the size of the float slice (`len(tensor.Data)`), preventing buffer overflows.
-  * Performs an IEEE 754 floating-point scan on the slice using `math.IsNaN()` and `math.IsInf()`. Rejects the request instantly upon finding any malformed float.
-  * Clamps incoming values to a safe boundary `[-100.0, 100.0]`.
-* **gRPC Hook integration**: `sanitizeTensor` is invoked inside `Forward()` at stream inception. If it fails, a structured gRPC error (`codes.InvalidArgument`) containing the warning is returned, terminating the session.
-
-### Client-Side Implementation (`client/client.go`)
-* **`sentInputs sync.Map`**: Tracks embedding data copies dispatched from the client to the network.
-* **`verifyComputation(input []float64, output []float64) error`**:
-  * Compares response float slice dimensions with stored inputs.
-  * Scans outputs for **all-zero arrays** (lazy computation detection) and **flat static non-zero arrays** (compromised server detection).
-  * Validates that values remain within defined decay offset bounds (preventing sudden erasures or massive computation mutations).
-  * Invoked immediately inside the client stream receiving thread, terminating client execution with security warning logs if a anomaly is detected.
-
-### Validation Test Suite (`tests/security_test.go`)
-We maintain a full test suite verifying these guards in real-world scenario conditions:
-* **`TestServerRejectsNaNTensor`**: Pushes NaN inputs; asserts the server rejects them.
-* **`TestServerRejectsInvalidShapeInvariant`**: Pushes shape-mismatched data; asserts server rejection.
-* **`TestClientDetectsPoisonedServerComputation`**: Spins up mock servers simulating `zeros`, `static flat`, and `explosive math` modes, verifying the client catches every anomaly.
-
----

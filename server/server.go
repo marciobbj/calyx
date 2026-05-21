@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -31,28 +32,43 @@ type KVCacheEntry struct {
 // Server implements the P2PService gRPC server
 type Server struct {
 	pb.UnimplementedP2PServiceServer
-	startLayer    int32
-	endLayer      int32
-	address       string
-	kvCache       sync.Map // TaskID (string) -> *KVCacheEntry
-	ttl           time.Duration
-	dht           *dht.KademliaDHT
-	powDifficulty int
-	transformer   *engine.TransformerLayer
-	tlsCert       tls.Certificate
+	startLayer        int32
+	endLayer          int32
+	address           string
+	kvCache           sync.Map // TaskID (string) -> *KVCacheEntry
+	ttl               time.Duration
+	dht               *dht.KademliaDHT
+	powDifficulty     int
+	transformer       *engine.TransformerLayer
+	tlsCert           tls.Certificate
+	teeEnclave        bool
+	attestationReport *crypto.AttestationReport
 }
 
 // NewServer creates a new Server node
-func NewServer(address string, startLayer, endLayer int32, ttl time.Duration, powDifficulty int, cert tls.Certificate, network *sync.Map) *Server {
+func NewServer(address string, startLayer, endLayer int32, ttl time.Duration, powDifficulty int, cert tls.Certificate, network *sync.Map, teeEnclave bool) *Server {
+	var report *crypto.AttestationReport
+	if teeEnclave {
+		var err error
+		report, err = crypto.GenerateAttestationReport(address, crypto.DefaultMRENCLAVE)
+		if err != nil {
+			log.Printf("[Server Layers %d-%d] Warning: failed to generate TEE attestation report: %v", startLayer, endLayer, err)
+		} else {
+			log.Printf("[Server Layers %d-%d] TEE: Cryptographically signed secure enclave attestation report generated (MRENCLAVE: %s)", startLayer, endLayer, report.MRENCLAVE)
+		}
+	}
+
 	srv := &Server{
-		address:       address,
-		startLayer:    startLayer,
-		endLayer:      endLayer,
-		ttl:           ttl,
-		powDifficulty: powDifficulty,
-		transformer:   engine.NewTransformerLayer(4), // default hiddenDim is 4
-		tlsCert:       cert,
-		dht:           dht.NewKademliaDHT(address, network),
+		address:           address,
+		startLayer:        startLayer,
+		endLayer:          endLayer,
+		ttl:               ttl,
+		powDifficulty:     powDifficulty,
+		transformer:       engine.NewTransformerLayer(4), // default hiddenDim is 4
+		tlsCert:           cert,
+		dht:               dht.NewKademliaDHT(address, network),
+		teeEnclave:        teeEnclave,
+		attestationReport: report,
 	}
 	// Announce capacity for each layer in its local DHT
 	for l := startLayer; l <= endLayer; l++ {
@@ -101,6 +117,26 @@ func (s *Server) Forward(stream pb.P2PService_ForwardServer) error {
 	// Verify the solution
 	if !crypto.Verify(expectedTaskID, nonce, s.powDifficulty) {
 		return fmt.Errorf("security violation: invalid Proof of Work nonce for TaskID %s and difficulty %d", expectedTaskID, s.powDifficulty)
+	}
+
+	// Send simulated TEE enclave attestation report if enabled
+	if s.teeEnclave && s.attestationReport != nil {
+		reportBytes, err := json.Marshal(s.attestationReport)
+		if err == nil {
+			headerMD := metadata.Pairs("enclave-attestation", string(reportBytes))
+			if sErr := stream.SendHeader(headerMD); sErr != nil {
+				log.Printf("[Server Layers %d-%d] Warning: failed to send TEE attestation header: %v", s.startLayer, s.endLayer, sErr)
+				_ = stream.SendHeader(metadata.MD{})
+			} else {
+				log.Printf("[Server Layers %d-%d] TEE: Sent secure attestation report to upstream client/peer", s.startLayer, s.endLayer)
+			}
+		} else {
+			log.Printf("[Server Layers %d-%d] Warning: failed to marshal TEE attestation report: %v", s.startLayer, s.endLayer, err)
+			_ = stream.SendHeader(metadata.MD{})
+		}
+	} else {
+		// Even if TEE is not enabled, we must send an empty header to prevent the client's Header() call from deadlocking the bidirectional stream
+		_ = stream.SendHeader(metadata.MD{})
 	}
 
 	for {
@@ -200,6 +236,28 @@ func (s *Server) Forward(stream pb.P2PService_ForwardServer) error {
 					return
 				}
 
+				// Retrieve and verify downstream server TEE attestation report
+				header, hErr := nextStream.Header()
+				if hErr != nil {
+					initErr = fmt.Errorf("failed to retrieve downstream TEE headers: %w", hErr)
+					return
+				}
+				if attestVals := header.Get("enclave-attestation"); len(attestVals) > 0 {
+					var report crypto.AttestationReport
+					if jsonErr := json.Unmarshal([]byte(attestVals[0]), &report); jsonErr != nil {
+						initErr = fmt.Errorf("failed to unmarshal downstream TEE report: %w", jsonErr)
+						return
+					}
+					if vErr := crypto.VerifyAttestationReport(&report, crypto.DefaultMRENCLAVE); vErr != nil {
+						initErr = fmt.Errorf("downstream TEE audit failed: %w", vErr)
+						return
+					}
+					log.Printf("[Server Layers %d-%d] TEE Audit (Success): Downstream node %s verified cryptographically", s.startLayer, s.endLayer, nextAddr)
+				} else if s.teeEnclave {
+					initErr = fmt.Errorf("security violation: downstream node %s did not provide a TEE attestation report", nextAddr)
+					return
+				}
+
 				// Spawn a goroutine to relay downstream responses back upstream
 				forwardWg.Add(1)
 				go func() {
@@ -271,7 +329,7 @@ func (s *Server) Register(bootstrapAddr string) error {
 }
 
 // StartServer runs the gRPC server and starts the TTL daemon
-func StartServer(ctx context.Context, bootstrapAddr string, startLayer, endLayer int32, addr string, ttl time.Duration, powDifficulty int, network *sync.Map, wg *sync.WaitGroup) (*grpc.Server, error) {
+func StartServer(ctx context.Context, bootstrapAddr string, startLayer, endLayer int32, addr string, ttl time.Duration, powDifficulty int, network *sync.Map, wg *sync.WaitGroup, teeEnclave bool) (*grpc.Server, error) {
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen on %s: %w", addr, err)
@@ -289,7 +347,7 @@ func StartServer(ctx context.Context, bootstrapAddr string, startLayer, endLayer
 	grpcServer := grpc.NewServer(grpc.Creds(credentials.NewTLS(tlsCfg)))
 
 	// 3. Initialize server node with DHT routing
-	srv := NewServer(addr, startLayer, endLayer, ttl, powDifficulty, cert, network)
+	srv := NewServer(addr, startLayer, endLayer, ttl, powDifficulty, cert, network, teeEnclave)
 	pb.RegisterP2PServiceServer(grpcServer, srv)
 
 	// If bootstrap address is provided, add it to DHT peers

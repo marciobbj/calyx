@@ -14,7 +14,7 @@ func TestServerKVCacheOperations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to generate cert: %v", err)
 	}
-	srv := NewServer("localhost:50051", 1, 4, 10*time.Second, 2, cert, nil)
+	srv := NewServer("localhost:50051", 1, 4, 10*time.Second, 2, cert, nil, false)
 
 	taskID := "task_test_123"
 
@@ -66,7 +66,7 @@ func TestServerMathMutation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to generate cert: %v", err)
 	}
-	srv := NewServer("localhost:50051", 1, 4, 10*time.Second, 2, cert, nil)
+	srv := NewServer("localhost:50051", 1, 4, 10*time.Second, 2, cert, nil, false)
 
 	// Create mock tensor data
 	tensorData := []float64{1.0, 2.0, 3.0, 4.0}
@@ -124,7 +124,7 @@ func TestServerTTLWorker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to generate cert: %v", err)
 	}
-	srv := NewServer("localhost:50051", 1, 4, ttl, 2, cert, nil)
+	srv := NewServer("localhost:50051", 1, 4, ttl, 2, cert, nil, false)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
