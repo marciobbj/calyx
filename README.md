@@ -1,16 +1,19 @@
 # Calyx
 
-This is a decentralized P2P network developed in Go that replicates the fundamental architectural blocks of the **Petals** decentralized P2P network. The objective is to allow client devices (representing weak consumer hardware) to process giant sequence lengths by delegating specific Transformer layer blocks to support servers, maintaining and updating the **KV Cache** remotely across **gRPC bidirectional streams** (Pipeline Parallelism).
+Calyx is an ultra-lightweight, decentralized P2P network and runtime engine written in Go, inspired by the architecture of the **Petals** P2P framework. It enables low-spec client hardware to execute massive Large Language Model (LLM) inference by sharding transformer layer blocks across a collaborative network of consumer-grade servers.
+
+By employing **Pipeline Parallelism**, intermediate token activations are streamed node-by-node using high-performance bidirectional gRPC streams, while remote **KV Caches** are dynamically updated and kept resident on supporting servers to bypass redundant computation.
 
 ---
 
-## Key Features
+## Architecture
 
-1. **True Pipeline Parallelism**: Activations are streamed node-by-node using persistent, lazy-initialized bidirectional gRPC streams to minimize round-trip connection overheads.
-2. **Decentralized KV Cache**: Each server node retains keys and values for its assigned subset of layers under a thread-safe task-indexed cache, avoiding recomputations for subsequent tokens.
-3. **Dynamic TTL Cache Eviction**: Background workers in each server monitor idle tasks and automatically purge expired KV Caches, freeing up system memory.
-4. **Decentralized Route Planning**: A mock DHT (Bootstrap Node) keeps track of active nodes and registers layer capacities, offering a routing API `FindRoute(startLayer, endLayer)` to formulate the optimal execution path.
-5. **Bi-directional Security & Trust**: Features built-in hardware protection for servers (sanitization, bounds checking) and computation verification for clients (trapdoor decay heuristics) to prevent resource exploitation or compute manipulation.
+1. **High-Performance Pipeline Parallelism**: Sequential activation routing using persistent, lazy-initialized bidirectional gRPC streams, minimizing round-trip latency overhead.
+2. **Decentralized KV Cache Residency**: Thread-safe task-indexed KV caching distributed across hosting servers, eliminating local VRAM/RAM constraints for deep inference chains.
+3. **Dynamic TTL Memory Eviction**: Automated background daemons continuously monitor idle sessions and clean up expired caches, ensuring optimal system resource utilization.
+4. **Model Discovery & Routing**: A dynamic Model Directory with a CLI dashboard queries active model capacities and layer slices, resolving the optimal pipeline path via a DHT overlay.
+5. **Bi-directional Security & TEE Attestation**: Complete transport confidentiality using dynamic TLS 1.3 with mutual authentication (mTLS) backed by cryptographic TEE Hardware Enclave attestation (simulated or strict physical Intel SGX check).
+6. **Network NAT Traversal**: Integrated RFC 5389 UDP STUN client that automatically discovers external public IPs and port mappings, making home-hosting accessible behind routers and firewalls.
 
 ---
 
@@ -154,13 +157,3 @@ A dedicated black-box [run_e2e_tests.sh](file:///home/io/workspace/connect/scrip
 5. Performs validation checks on files inside the `test_logs/` directory to assert remote KV Cache growth and successful pipeline execution.
 6. Employs a robust `trap` mechanism to terminate background node PIDs cleanly upon completion or interruption.
 
----
-
-### Continuous Integration (GitHub Actions)
-
-A GitHub Actions workflow is configured under `.github/workflows/go-ci.yml`. It runs automatically on every commit push or pull request to:
-* Validate code formatting (`gofmt`).
-* Analyze code statically (`go vet`).
-* Compile the project binary.
-* Execute the package-level unit and integration test suite (`make test`).
-* Execute the black-box CLI E2E process suite (`make e2e-test`).
