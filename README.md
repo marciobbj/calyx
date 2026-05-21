@@ -15,28 +15,6 @@ Calyx is an ultra-lightweight, decentralized P2P network and runtime engine writ
 
 ---
 
-## Practical Use Cases & Deployment Scenarios
-
-Calyx's lightweight P2P pipeline parallel runtime is designed for developers, researchers, and decentralized application creators who want to democratize AI compute. Some primary deployment scenarios include:
-
-1. **Decentralized AI Agent Swarms**:
-   * *Scenario*: Autonomous software agents (e.g., coding assistants, automated interpreters, web research agents) running locally on consumer hardware.
-   * *Benefit*: Instead of paying high API subscription fees or requiring local multi-GPU setups to run large model parameters, agents act as lightweight P2P clients that offload transformer computations across a trustless cluster of collaborative peers.
-
-2. **Collaborative Consumer-Grade Hosting**:
-   * *Scenario*: A community or enterprise wants to host a customized deep neural network model without relying on monopolized cloud hyperscalers.
-   * *Benefit*: Individual members commit fractional compute resources (e.g. sharing 4 to 8 model layers using standard household CPUs or GPUs), aggregating memory bandwidth to run powerful pipelines collaboratively.
-
-3. **Privacy-Preserving Edge Computing**:
-   * *Scenario*: Local smart devices or localized enterprise networks that cannot leak private, sensitive input data (like environment variables, configuration files, or proprietary logic) to central cloud authorities.
-   * *Benefit*: Combining client-side Differential Privacy (DP noise injection) with fragmented multi-node layer routing ensures that no single server node ever intercepts or reconstructs the full prompt context or model activations.
-
-4. **Zero-Friction Local AI Development (Dev Swarms)**:
-   * *Scenario*: A local team of software developers working on codebases wants to share GPU resources on their office network.
-   * *Benefit*: Teammates run Calyx servers in the background of their workstations, pooling unused desktop GPU/CPU power into a local cluster that any developer's IDE agent can query instantly via standard gRPC APIs.
-
----
-
 ## Bi-Directional Security Safeguards
 
 Calyx implements a robust, bi-directional security architecture to protect all participants in the untrusted P2P network:
@@ -177,3 +155,28 @@ A dedicated black-box [run_e2e_tests.sh](file:///home/io/workspace/connect/scrip
 5. Performs validation checks on files inside the `test_logs/` directory to assert remote KV Cache growth and successful pipeline execution.
 6. Employs a robust `trap` mechanism to terminate background node PIDs cleanly upon completion or interruption.
 
+---
+
+## Practical Use Cases & Deployment Scenarios
+
+Calyx's lightweight P2P pipeline parallel runtime is designed for developers, researchers, and decentralized application creators who want to democratize AI compute. Some primary deployment scenarios include:
+
+1. **Decentralized AI Agent Swarms**:
+   * *Scenario*: Autonomous software agents (e.g., coding assistants, automated interpreters, web research agents) running locally on consumer hardware.
+   * *Benefit*: Instead of paying high API subscription fees or requiring local multi-GPU setups to run large model parameters, agents act as lightweight P2P clients that offload transformer computations across a trustless cluster of collaborative peers.
+
+2. **Collaborative Consumer-Grade Hosting**:
+   * *Scenario*: A community or enterprise wants to host a customized deep neural network model without relying on monopolized cloud hyperscalers.
+   * *Benefit*: Individual members commit fractional compute resources (e.g. sharing 4 to 8 model layers using standard household CPUs or GPUs), aggregating memory bandwidth to run powerful pipelines collaboratively.
+
+3. **Privacy-Preserving Edge Computing**:
+   * *Scenario*: Local smart devices or localized enterprise networks that cannot leak private, sensitive input data (like environment variables, configuration files, or proprietary logic) to central cloud authorities.
+   * *Benefit*: Combining client-side Differential Privacy (DP noise injection) with fragmented multi-node layer routing ensures that no single server node ever intercepts or reconstructs the full prompt context or model activations.
+
+4. **Zero-Friction Local AI Development (Dev Swarms)**:
+   * *Scenario*: A local team of software developers working on codebases wants to share GPU resources on their office network.
+   * *Benefit*: Teammates run Calyx servers in the background of their workstations, pooling unused desktop GPU/CPU power into a local cluster that any developer's IDE agent can query instantly via standard gRPC APIs.
+
+--- 
+
+MIT
