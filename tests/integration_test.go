@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"connect/bootstrap"
-	"connect/client"
-	"connect/server"
+	"calyx/bootstrap"
+	"calyx/client"
+	"calyx/server"
 )
 
 // getFreeTCPPort returns a dynamically available free TCP port on localhost

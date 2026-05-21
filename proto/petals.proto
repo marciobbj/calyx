@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package petals;
 
-option go_package = "connect/proto";
+option go_package = "calyx/proto";
 
 // Tensor represents activations or hidden states
 message Tensor {

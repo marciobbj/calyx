@@ -11,9 +11,9 @@ import (
 	"syscall"
 	"time"
 
-	"connect/bootstrap"
-	"connect/client"
-	"connect/server"
+	"calyx/bootstrap"
+	"calyx/client"
+	"calyx/server"
 )
 
 func main() {

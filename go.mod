@@ -1,4 +1,4 @@
-module connect
+module calyx
 
 go 1.26.3
 

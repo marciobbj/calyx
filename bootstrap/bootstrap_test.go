@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	pb "connect/proto"
+	pb "calyx/proto"
 )
 
 func TestRegisterNode(t *testing.T) {

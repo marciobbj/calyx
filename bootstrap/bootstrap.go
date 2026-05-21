@@ -8,7 +8,7 @@ import (
 	"net"
 	"sync"
 
-	pb "connect/proto"
+	pb "calyx/proto"
 	"google.golang.org/grpc"
 )
 

@@ -437,7 +437,7 @@ const file_proto_petals_proto_rawDesc = "" +
 	"\tFindRoute\x12\x14.petals.RouteRequest\x1a\x15.petals.RouteResponse2L\n" +
 	"\n" +
 	"P2PService\x12>\n" +
-	"\aForward\x12\x16.petals.ForwardRequest\x1a\x17.petals.ForwardResponse(\x010\x01B\x0fZ\rconnect/protob\x06proto3"
+	"\aForward\x12\x16.petals.ForwardRequest\x1a\x17.petals.ForwardResponse(\x010\x01B\rZ\vcalyx/protob\x06proto3"
 
 var (
 	file_proto_petals_proto_rawDescOnce sync.Once
