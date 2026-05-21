@@ -1,4 +1,4 @@
-# Petals P2P Architecture in Go
+# Calyx
 
 This is a decentralized P2P network developed in Go that replicates the fundamental architectural blocks of the **Petals** decentralized P2P network. The objective is to allow client devices (representing weak consumer hardware) to process giant sequence lengths by delegating specific Transformer layer blocks to support servers, maintaining and updating the **KV Cache** remotely across **gRPC bidirectional streams** (Pipeline Parallelism).
 
