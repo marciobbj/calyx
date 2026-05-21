@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -11,9 +12,13 @@ import (
 	"sync"
 	"time"
 
+	"calyx/crypto"
+	"calyx/dht"
+	"calyx/engine"
 	pb "calyx/proto"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
 )
 
 // KVCacheEntry represents a thread-safe KV cache entry for a single task session
@@ -26,21 +31,34 @@ type KVCacheEntry struct {
 // Server implements the P2PService gRPC server
 type Server struct {
 	pb.UnimplementedP2PServiceServer
-	startLayer int32
-	endLayer   int32
-	address    string
-	kvCache    sync.Map // TaskID (string) -> *KVCacheEntry
-	ttl        time.Duration
+	startLayer    int32
+	endLayer      int32
+	address       string
+	kvCache       sync.Map // TaskID (string) -> *KVCacheEntry
+	ttl           time.Duration
+	dht           *dht.KademliaDHT
+	powDifficulty int
+	transformer   *engine.TransformerLayer
+	tlsCert       tls.Certificate
 }
 
 // NewServer creates a new Server node
-func NewServer(address string, startLayer, endLayer int32, ttl time.Duration) *Server {
-	return &Server{
-		address:    address,
-		startLayer: startLayer,
-		endLayer:   endLayer,
-		ttl:        ttl,
+func NewServer(address string, startLayer, endLayer int32, ttl time.Duration, powDifficulty int, cert tls.Certificate, network *sync.Map) *Server {
+	srv := &Server{
+		address:       address,
+		startLayer:    startLayer,
+		endLayer:      endLayer,
+		ttl:           ttl,
+		powDifficulty: powDifficulty,
+		transformer:   engine.NewTransformerLayer(4), // default hiddenDim is 4
+		tlsCert:       cert,
+		dht:           dht.NewKademliaDHT(address, network),
 	}
+	// Announce capacity for each layer in its local DHT
+	for l := startLayer; l <= endLayer; l++ {
+		srv.dht.Store(l, address)
+	}
+	return srv
 }
 
 // Forward implements the gRPC streaming execution pipeline
@@ -63,6 +81,28 @@ func (s *Server) Forward(stream pb.P2PService_ForwardServer) error {
 		}
 	}()
 
+	// Retrieve client metadata to verify Hashcash Proof-of-Work
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return errors.New("security violation: missing metadata")
+	}
+	nonces := md.Get("pow-nonce")
+	if len(nonces) == 0 {
+		return errors.New("security violation: missing Proof-of-Work nonce")
+	}
+	nonce := nonces[0]
+
+	taskIDs := md.Get("task-id")
+	if len(taskIDs) == 0 {
+		return errors.New("security violation: missing task-id in metadata")
+	}
+	expectedTaskID := taskIDs[0]
+
+	// Verify the solution
+	if !crypto.Verify(expectedTaskID, nonce, s.powDifficulty) {
+		return fmt.Errorf("security violation: invalid Proof of Work nonce for TaskID %s and difficulty %d", expectedTaskID, s.powDifficulty)
+	}
+
 	for {
 		req, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
@@ -75,6 +115,11 @@ func (s *Server) Forward(stream pb.P2PService_ForwardServer) error {
 		tensor := req.Tensor
 		if tensor == nil {
 			return errors.New("received nil tensor")
+		}
+
+		// Verify Task ID matches authenticated stream Task ID
+		if tensor.TaskId != expectedTaskID {
+			return fmt.Errorf("security violation: tensor TaskID %s mismatches authenticated stream TaskID %s", tensor.TaskId, expectedTaskID)
 		}
 
 		// Run security sanitization and bounds checking
@@ -99,25 +144,19 @@ func (s *Server) Forward(stream pb.P2PService_ForwardServer) error {
 
 		entry.mu.Lock()
 		entry.LastAccessed = time.Now()
-		entry.Data = append(entry.Data, tensor.Data...)
+
+		// Adjust the transformer layer weights or hidden dimensions to match incoming tensor shape if needed
+		if len(tensor.Shape) >= 2 && int(tensor.Shape[1]) != s.transformer.HiddenDim {
+			s.transformer = engine.NewTransformerLayer(int(tensor.Shape[1]))
+		}
+
+		// Run actual transformer forward pass!
+		outData, tErr := s.transformer.Forward(tensor.Data, tensor.Shape, &entry.Data)
+		if tErr != nil {
+			entry.mu.Unlock()
+			return fmt.Errorf("transformer forward error: %w", tErr)
+		}
 		cacheLength := len(entry.Data)
-
-		// 2. Simulate mathematical calculation depending on local layers and KV Cache state
-		// We calculate the average of the accumulated KV cache values to inject sequence dependencies
-		var cacheAvg float64
-		if cacheLength > 0 {
-			var sum float64
-			for _, val := range entry.Data {
-				sum += val
-			}
-			cacheAvg = sum / float64(cacheLength)
-		}
-
-		outData := make([]float64, len(tensor.Data))
-		for i, val := range tensor.Data {
-			// Mutation formula: slight decay, cache influence, and small offset relative to layers
-			outData[i] = val*0.95 + cacheAvg*0.04 + float64(s.startLayer)*0.01
-		}
 		entry.mu.Unlock()
 
 		log.Printf("[Server Layers %d-%d] KV Cache Part %d: Processed Tensor %s (Accumulated context size: %d floats)",
@@ -146,14 +185,17 @@ func (s *Server) Forward(stream pb.P2PService_ForwardServer) error {
 
 			// Initialize connection to next node lazily once
 			onceInit.Do(func() {
-				log.Printf("[Server Layers %d-%d] Pipeline: Connecting to the next node %s...", s.startLayer, s.endLayer, nextAddr)
-				nextConn, initErr = grpc.NewClient(nextAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+				log.Printf("[Server Layers %d-%d] Pipeline: Connecting to the next node %s via mTLS...", s.startLayer, s.endLayer, nextAddr)
+				clientTLS := crypto.GetClientTLSConfig(s.tlsCert)
+				nextConn, initErr = grpc.NewClient(nextAddr, grpc.WithTransportCredentials(credentials.NewTLS(clientTLS)))
 				if initErr != nil {
 					return
 				}
 
 				client := pb.NewP2PServiceClient(nextConn)
-				nextStream, initErr = client.Forward(ctx)
+				// Propagate outgoing metadata so downstream servers can verify task and pow if needed.
+				nextStreamCtx := metadata.NewOutgoingContext(ctx, md)
+				nextStream, initErr = client.Forward(nextStreamCtx)
 				if initErr != nil {
 					return
 				}
@@ -202,9 +244,10 @@ func (s *Server) Forward(stream pb.P2PService_ForwardServer) error {
 	}
 }
 
-// Register contacts the Bootstrap server and registers this node
+// Register contacts the Bootstrap server and registers this node using secure mTLS
 func (s *Server) Register(bootstrapAddr string) error {
-	conn, err := grpc.NewClient(bootstrapAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	clientTLS := crypto.GetClientTLSConfig(s.tlsCert)
+	conn, err := grpc.NewClient(bootstrapAddr, grpc.WithTransportCredentials(credentials.NewTLS(clientTLS)))
 	if err != nil {
 		return fmt.Errorf("failed to connect to bootstrap: %w", err)
 	}
@@ -228,29 +271,66 @@ func (s *Server) Register(bootstrapAddr string) error {
 }
 
 // StartServer runs the gRPC server and starts the TTL daemon
-func StartServer(ctx context.Context, bootstrapAddr string, startLayer, endLayer int32, addr string, ttl time.Duration, wg *sync.WaitGroup) (*grpc.Server, error) {
+func StartServer(ctx context.Context, bootstrapAddr string, startLayer, endLayer int32, addr string, ttl time.Duration, powDifficulty int, network *sync.Map, wg *sync.WaitGroup) (*grpc.Server, error) {
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen on %s: %w", addr, err)
 	}
 
-	grpcServer := grpc.NewServer()
-	srv := NewServer(addr, startLayer, endLayer, ttl)
+	// 1. Generate key pair and dynamic mTLS certificate
+	cert, err := crypto.GenerateKeyPairAndCert()
+	if err != nil {
+		lis.Close()
+		return nil, fmt.Errorf("failed to generate TLS certificate: %w", err)
+	}
+
+	// 2. Configure server TLS 1.3 settings
+	tlsCfg := crypto.GetServerTLSConfig(cert)
+	grpcServer := grpc.NewServer(grpc.Creds(credentials.NewTLS(tlsCfg)))
+
+	// 3. Initialize server node with DHT routing
+	srv := NewServer(addr, startLayer, endLayer, ttl, powDifficulty, cert, network)
 	pb.RegisterP2PServiceServer(grpcServer, srv)
+
+	// If bootstrap address is provided, add it to DHT peers
+	if bootstrapAddr != "" {
+		bootstrapID := dht.HashString(bootstrapAddr)
+		srv.dht.AddPeer(dht.Peer{
+			ID:         bootstrapID,
+			Address:    bootstrapAddr,
+			StartLayer: 0,
+			EndLayer:   0,
+		})
+
+		// If in-memory overlay map is active, populate bi-directionally
+		if network != nil {
+			if val, ok := network.Load(bootstrapID); ok {
+				if bootstrapDHT, ok := val.(*dht.KademliaDHT); ok {
+					bootstrapDHT.AddPeer(dht.Peer{
+						ID:         srv.dht.LocalID,
+						Address:    srv.address,
+						StartLayer: srv.startLayer,
+						EndLayer:   srv.endLayer,
+					})
+				}
+			}
+		}
+	}
 
 	// Start TTL monitor daemon in background
 	go srv.startTTLWorker(ctx)
 
-	// Register with Bootstrap
-	if err := srv.Register(bootstrapAddr); err != nil {
-		grpcServer.Stop()
-		return nil, fmt.Errorf("failed to register with Bootstrap: %w", err)
+	// Register with Bootstrap (optional fallback, since DHT is fully decentralized)
+	if bootstrapAddr != "" {
+		if err := srv.Register(bootstrapAddr); err != nil {
+			log.Printf("[Server Layers %d-%d] Warning: failed to register with Bootstrap coordinator (%v). Continuing via DHT routing...", startLayer, endLayer, err)
+		}
 	}
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		log.Printf("[Server Layers %d-%d] P2P server started on %s", startLayer, endLayer, addr)
+		log.Printf("[Server Layers %d-%d] Secure P2P mTLS server started on %s", startLayer, endLayer, addr)
 		if err := grpcServer.Serve(lis); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
 			log.Printf("[Server Layers %d-%d] Server error: %v", startLayer, endLayer, err)
 		}
@@ -331,7 +411,7 @@ func (s *Server) sanitizeTensor(tensor *pb.Tensor) error {
 		if math.IsInf(val, 0) {
 			return fmt.Errorf("malicious tensor data: detected Infinity value at index %d", i)
 		}
-		
+
 		// Clamp to a safe physical boundary to prevent numerical overflow exploits
 		if val > 100.0 {
 			tensor.Data[i] = 100.0
@@ -342,4 +422,3 @@ func (s *Server) sanitizeTensor(tensor *pb.Tensor) error {
 
 	return nil
 }
-

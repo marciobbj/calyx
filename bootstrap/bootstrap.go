@@ -8,8 +8,10 @@ import (
 	"net"
 	"sync"
 
+	"calyx/crypto"
 	pb "calyx/proto"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 // NodeInfo stores registration information for a server node
@@ -103,21 +105,31 @@ func (s *Server) FindRoute(ctx context.Context, req *pb.RouteRequest) (*pb.Route
 	return &pb.RouteResponse{Addresses: route}, nil
 }
 
-// StartBootstrapServer starts the Bootstrap gRPC server on the specified address
+// StartBootstrapServer starts the Bootstrap gRPC server on the specified address using secure mTLS
 func StartBootstrapServer(addr string, wg *sync.WaitGroup) (*grpc.Server, error) {
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen: %w", err)
 	}
 
-	grpcServer := grpc.NewServer()
+	// Generate key pair and dynamic mTLS certificate
+	cert, err := crypto.GenerateKeyPairAndCert()
+	if err != nil {
+		lis.Close()
+		return nil, fmt.Errorf("failed to generate TLS certificate: %w", err)
+	}
+
+	// Configure server TLS 1.3 settings
+	tlsCfg := crypto.GetServerTLSConfig(cert)
+	grpcServer := grpc.NewServer(grpc.Creds(credentials.NewTLS(tlsCfg)))
+
 	bootstrapServer := NewServer()
 	pb.RegisterBootstrapServiceServer(grpcServer, bootstrapServer)
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		log.Printf("[Bootstrap] gRPC server started on %s", addr)
+		log.Printf("[Bootstrap] Secure gRPC mTLS server started on %s", addr)
 		if err := grpcServer.Serve(lis); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
 			log.Printf("[Bootstrap] Server error: %v", err)
 		}

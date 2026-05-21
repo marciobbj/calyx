@@ -44,7 +44,7 @@ func TestClientEndToEndPipeline(t *testing.T) {
 
 	// 3. Start Server Node (Layers 1-4)
 	// We use a short TTL (1s) to make sure it doesn't leak cache on long runs
-	sSrv, err := server.StartServer(ctx, bootstrapAddr, 1, 4, serverAddr, 1*time.Second, &wg)
+	sSrv, err := server.StartServer(ctx, bootstrapAddr, 1, 4, serverAddr, 1*time.Second, 2, nil, &wg)
 	if err != nil {
 		t.Fatalf("Failed to start Server node: %v", err)
 	}
@@ -55,9 +55,9 @@ func TestClientEndToEndPipeline(t *testing.T) {
 
 	// 4. Run Client Pipeline for layers 1-4 (covered by our registered server node)
 	taskID := fmt.Sprintf("test_task_e2e_%d", time.Now().Unix())
-	
+
 	// Execute RunClient and assert success
-	err = RunClient(bootstrapAddr, 1, 4, taskID)
+	err = RunClient(bootstrapAddr, 1, 4, taskID, 2, nil)
 	if err != nil {
 		t.Fatalf("E2E Pipeline execution failed: %v", err)
 	}

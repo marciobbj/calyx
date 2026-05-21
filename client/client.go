@@ -9,55 +9,101 @@ import (
 	"sync"
 	"time"
 
+	"calyx/crypto"
+	"calyx/dht"
 	pb "calyx/proto"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
 )
 
 // RunClient runs the Client node scenario, querying the bootstrap and processing the pipeline
-func RunClient(bootstrapAddr string, startLayer, endLayer int32, taskID string) error {
+func RunClient(bootstrapAddr string, startLayer, endLayer int32, taskID string, powDifficulty int, network *sync.Map) error {
 	log.Printf("[Client] Initializing client node (weak machine)...")
 
-	// 1. Connect to Bootstrap Node
-	bootstrapConn, err := grpc.NewClient(bootstrapAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// 1. Generate key pair and dynamic client certificate
+	cert, err := crypto.GenerateKeyPairAndCert()
 	if err != nil {
-		return fmt.Errorf("failed to connect to bootstrap: %w", err)
+		return fmt.Errorf("failed to generate TLS certificate: %w", err)
 	}
-	defer bootstrapConn.Close()
 
-	bootstrapClient := pb.NewBootstrapServiceClient(bootstrapConn)
+	// 2. Solve Proof-of-Work puzzle to gain access to servers
+	log.Printf("[Client] Solving Hashcash Proof-of-Work challenge (Difficulty: %d, Salt: %s)...", powDifficulty, taskID)
+	powStart := time.Now()
+	nonce := crypto.Solve(taskID, powDifficulty)
+	log.Printf("[Client] Solved Proof-of-Work puzzle in %v! Nonce: %s", time.Since(powStart), nonce)
 
-	// 2. Discover Route
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	log.Printf("[Client] Querying Bootstrap for route to process Layers %d-%d...", startLayer, endLayer)
-	routeResp, err := bootstrapClient.FindRoute(ctx, &pb.RouteRequest{
-		StartLayer: startLayer,
-		EndLayer:   endLayer,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to discover route: %w", err)
+	// 3. Discover Route using Kademlia DHT (falling back to gRPC coordinator if needed)
+	var route []string
+	useDHT := false
+
+	if network != nil {
+		log.Printf("[Client] Discovering route using Kademlia DHT...")
+		clientDHT := dht.NewKademliaDHT("client_node", network)
+		bootstrapID := dht.HashString(bootstrapAddr)
+		clientDHT.AddPeer(dht.Peer{
+			ID:      bootstrapID,
+			Address: bootstrapAddr,
+		})
+
+		for l := startLayer; l <= endLayer; l++ {
+			providers := clientDHT.RecursiveFindValue(l, nil)
+			if len(providers) > 0 {
+				provider := providers[0]
+				if len(route) == 0 || route[len(route)-1] != provider {
+					route = append(route, provider)
+				}
+				useDHT = true
+			}
+		}
 	}
 
-	route := routeResp.Addresses
+	if !useDHT || len(route) == 0 {
+		log.Printf("[Client] DHT search yielded no providers. Querying central Bootstrap coordinator via secure mTLS...")
+		clientTLS := crypto.GetClientTLSConfig(cert)
+		bootstrapConn, err := grpc.NewClient(bootstrapAddr, grpc.WithTransportCredentials(credentials.NewTLS(clientTLS)))
+		if err != nil {
+			return fmt.Errorf("failed to connect to bootstrap: %w", err)
+		}
+		defer bootstrapConn.Close()
+
+		bootstrapClient := pb.NewBootstrapServiceClient(bootstrapConn)
+		routeResp, err := bootstrapClient.FindRoute(ctx, &pb.RouteRequest{
+			StartLayer: startLayer,
+			EndLayer:   endLayer,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to discover route: %w", err)
+		}
+		route = routeResp.Addresses
+	}
+
 	if len(route) == 0 {
 		return fmt.Errorf("discovered route is empty")
 	}
 
-	log.Printf("[Client] Processing route planned by Bootstrap: [Client] -> %s -> [Client]", formatRouteChain(route))
+	log.Printf("[Client] Processing route: [Client] -> %s -> [Client]", formatRouteChain(route))
 
-	// 3. Connect to the first server node in the route chain
+	// 4. Connect to the first server node in the route chain
 	firstNodeAddr := route[0]
-	log.Printf("[Client] Opening connection to the first node of the pipeline: %s", firstNodeAddr)
-	serverConn, err := grpc.NewClient(firstNodeAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	log.Printf("[Client] Opening connection to the first node of the pipeline: %s via secure mTLS...", firstNodeAddr)
+	clientTLS := crypto.GetClientTLSConfig(cert)
+	serverConn, err := grpc.NewClient(firstNodeAddr, grpc.WithTransportCredentials(credentials.NewTLS(clientTLS)))
 	if err != nil {
 		return fmt.Errorf("failed to connect to server %s: %w", firstNodeAddr, err)
 	}
 	defer serverConn.Close()
 
 	p2pClient := pb.NewP2PServiceClient(serverConn)
-	p2pStream, err := p2pClient.Forward(context.Background())
+
+	// Send PoW challenge nonces via metadata context
+	md := metadata.Pairs("pow-nonce", nonce, "task-id", taskID)
+	streamCtx := metadata.NewOutgoingContext(context.Background(), md)
+
+	p2pStream, err := p2pClient.Forward(streamCtx)
 	if err != nil {
 		return fmt.Errorf("failed to open P2P forward stream: %w", err)
 	}
@@ -67,7 +113,7 @@ func RunClient(bootstrapAddr string, startLayer, endLayer int32, taskID string) 
 	var streamErr error
 	var sentInputs sync.Map
 
-	// 4. Start receiving thread
+	// 5. Start receiving thread
 	go func() {
 		defer close(doneChan)
 		for {
@@ -102,13 +148,13 @@ func RunClient(bootstrapAddr string, startLayer, endLayer int32, taskID string) 
 		}
 	}()
 
-	// 5. Send sequence of activations (simulating Embedding step of a long context)
+	// 6. Send sequence of activations (simulating Embedding step of a long context)
 	// We send 3 activation slices sequentially to showcase KV cache growth on the remote servers
 	log.Printf("[Client] Simulating Embedding of dummy long context (3 successive tokens)...")
 	for t := 1; t <= 3; t++ {
 		// Mock token embeddings representation (each token is a 4-dimensional vector)
 		data := []float64{float64(t) * 1.5, float64(t) * -0.5, float64(t) * 2.0, float64(t) * 0.8}
-		
+
 		tensor := &pb.Tensor{
 			Id:     fmt.Sprintf("token_%d", t),
 			TaskId: taskID,
@@ -133,7 +179,7 @@ func RunClient(bootstrapAddr string, startLayer, endLayer int32, taskID string) 
 		time.Sleep(800 * time.Millisecond)
 	}
 
-	// 6. Gracefully close client sending stream and wait for all pipeline outputs
+	// 7. Gracefully close client sending stream and wait for all pipeline outputs
 	p2pStream.CloseSend()
 	<-doneChan
 
@@ -191,4 +237,3 @@ func verifyComputation(input []float64, output []float64) error {
 
 	return nil
 }
-

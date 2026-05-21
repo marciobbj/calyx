@@ -4,11 +4,17 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"calyx/crypto"
 )
 
 func TestServerKVCacheOperations(t *testing.T) {
 	// Initialize a Server node
-	srv := NewServer("localhost:50051", 1, 4, 10*time.Second)
+	cert, err := crypto.GenerateKeyPairAndCert()
+	if err != nil {
+		t.Fatalf("failed to generate cert: %v", err)
+	}
+	srv := NewServer("localhost:50051", 1, 4, 10*time.Second, 2, cert, nil)
 
 	taskID := "task_test_123"
 
@@ -56,11 +62,15 @@ func TestServerKVCacheOperations(t *testing.T) {
 }
 
 func TestServerMathMutation(t *testing.T) {
-	srv := NewServer("localhost:50051", 1, 4, 10*time.Second)
-	
+	cert, err := crypto.GenerateKeyPairAndCert()
+	if err != nil {
+		t.Fatalf("failed to generate cert: %v", err)
+	}
+	srv := NewServer("localhost:50051", 1, 4, 10*time.Second, 2, cert, nil)
+
 	// Create mock tensor data
 	tensorData := []float64{1.0, 2.0, 3.0, 4.0}
-	
+
 	// Set up a mock KV cache for the task to simulate dependency
 	taskID := "task_test_math"
 	entry := &KVCacheEntry{
@@ -84,7 +94,7 @@ func TestServerMathMutation(t *testing.T) {
 		t.Fatalf("Failed to retrieve cache")
 	}
 	cacheEntry := entryVal.(*KVCacheEntry)
-	
+
 	cacheEntry.mu.Lock()
 	cacheLength := len(cacheEntry.Data)
 	var sum float64
@@ -110,7 +120,11 @@ func TestServerMathMutation(t *testing.T) {
 func TestServerTTLWorker(t *testing.T) {
 	// Start with a super short TTL for testing
 	ttl := 100 * time.Millisecond
-	srv := NewServer("localhost:50051", 1, 4, ttl)
+	cert, err := crypto.GenerateKeyPairAndCert()
+	if err != nil {
+		t.Fatalf("failed to generate cert: %v", err)
+	}
+	srv := NewServer("localhost:50051", 1, 4, ttl, 2, cert, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

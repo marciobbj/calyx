@@ -12,11 +12,13 @@ import (
 
 	"calyx/bootstrap"
 	"calyx/client"
+	"calyx/crypto"
 	pb "calyx/proto"
 	"calyx/server"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
 )
 
 // MaliciousServer simulates a compromised or lazy node in the network
@@ -76,12 +78,20 @@ func startMaliciousServer(bootstrapAddr, addr string, mode string, startLayer, e
 		return nil, err
 	}
 
-	grpcServer := grpc.NewServer()
+	cert, err := crypto.GenerateKeyPairAndCert()
+	if err != nil {
+		lis.Close()
+		return nil, err
+	}
+
+	tlsCfg := crypto.GetServerTLSConfig(cert)
+	grpcServer := grpc.NewServer(grpc.Creds(credentials.NewTLS(tlsCfg)))
 	srv := &MaliciousServer{mode: mode}
 	pb.RegisterP2PServiceServer(grpcServer, srv)
 
-	// Connect to bootstrap and register the node
-	conn, err := grpc.NewClient(bootstrapAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// Connect to bootstrap and register the node using secure mTLS
+	clientTLS := crypto.GetClientTLSConfig(cert)
+	conn, err := grpc.NewClient(bootstrapAddr, grpc.WithTransportCredentials(credentials.NewTLS(clientTLS)))
 	if err != nil {
 		grpcServer.Stop()
 		lis.Close()
@@ -133,7 +143,6 @@ func TestServerRejectsNaNTensor(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// 2. Start a normal Server node (uses the server package that has sanitizeTensor implemented)
-	// We import "calyx/server" implicitly through this setup or use dynamic config
 	sSrv, err := startNormalServer(ctx, bootstrapAddr, serverAddr, &wg)
 	if err != nil {
 		t.Fatalf("Failed to start Server: %v", err)
@@ -141,15 +150,27 @@ func TestServerRejectsNaNTensor(t *testing.T) {
 	defer sSrv.GracefulStop()
 	time.Sleep(100 * time.Millisecond)
 
-	// 3. Dial the server directly to send NaN
-	conn, err := grpc.NewClient(serverAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// 3. Dial the server directly using mTLS
+	cert, err := crypto.GenerateKeyPairAndCert()
+	if err != nil {
+		t.Fatalf("Failed to generate client TLS cert: %v", err)
+	}
+	clientTLS := crypto.GetClientTLSConfig(cert)
+	conn, err := grpc.NewClient(serverAddr, grpc.WithTransportCredentials(credentials.NewTLS(clientTLS)))
 	if err != nil {
 		t.Fatalf("Failed to connect to server: %v", err)
 	}
 	defer conn.Close()
 
+	// 4. Solve Proof of Work challenge (difficulty = 2)
+	taskID := "nan_test"
+	nonce := crypto.Solve(taskID, 2)
+
 	client := pb.NewP2PServiceClient(conn)
-	stream, err := client.Forward(ctx)
+	md := metadata.Pairs("pow-nonce", nonce, "task-id", taskID)
+	streamCtx := metadata.NewOutgoingContext(ctx, md)
+
+	stream, err := client.Forward(streamCtx)
 	if err != nil {
 		t.Fatalf("Failed to open forward stream: %v", err)
 	}
@@ -157,7 +178,7 @@ func TestServerRejectsNaNTensor(t *testing.T) {
 	req := &pb.ForwardRequest{
 		Tensor: &pb.Tensor{
 			Id:     "nan_token",
-			TaskId: "nan_test",
+			TaskId: taskID,
 			Data:   []float64{1.0, math.NaN(), 3.0, 4.0},
 			Shape:  []int64{1, 4},
 		},
@@ -202,15 +223,27 @@ func TestServerRejectsInvalidShapeInvariant(t *testing.T) {
 	defer sSrv.GracefulStop()
 	time.Sleep(100 * time.Millisecond)
 
-	// 3. Dial the server directly
-	conn, err := grpc.NewClient(serverAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// 3. Dial the server directly using mTLS
+	cert, err := crypto.GenerateKeyPairAndCert()
+	if err != nil {
+		t.Fatalf("Failed to generate client TLS cert: %v", err)
+	}
+	clientTLS := crypto.GetClientTLSConfig(cert)
+	conn, err := grpc.NewClient(serverAddr, grpc.WithTransportCredentials(credentials.NewTLS(clientTLS)))
 	if err != nil {
 		t.Fatalf("Failed to connect to server: %v", err)
 	}
 	defer conn.Close()
 
+	// 4. Solve Proof of Work challenge (difficulty = 2)
+	taskID := "shape_test"
+	nonce := crypto.Solve(taskID, 2)
+
 	client := pb.NewP2PServiceClient(conn)
-	stream, err := client.Forward(ctx)
+	md := metadata.Pairs("pow-nonce", nonce, "task-id", taskID)
+	streamCtx := metadata.NewOutgoingContext(ctx, md)
+
+	stream, err := client.Forward(streamCtx)
 	if err != nil {
 		t.Fatalf("Failed to open forward stream: %v", err)
 	}
@@ -218,9 +251,9 @@ func TestServerRejectsInvalidShapeInvariant(t *testing.T) {
 	req := &pb.ForwardRequest{
 		Tensor: &pb.Tensor{
 			Id:     "shape_token",
-			TaskId: "shape_test",
+			TaskId: taskID,
 			Data:   []float64{1.0, 2.0, 3.0}, // only 3 elements
-			Shape:  []int64{1, 4},             // claims 4 elements expected
+			Shape:  []int64{1, 4},            // claims 4 elements expected
 		},
 		Route:             []string{serverAddr},
 		CurrentRouteIndex: 0,
@@ -266,7 +299,7 @@ func TestClientDetectsPoisonedServerComputation(t *testing.T) {
 
 			// 3. Run Client requesting layers 1 to 8
 			taskID := fmt.Sprintf("malicious_client_test_%s_%d", mode, time.Now().Unix())
-			err = client.RunClient(bootstrapAddr, 1, 8, taskID)
+			err = client.RunClient(bootstrapAddr, 1, 8, taskID, 2, nil)
 			if err == nil {
 				t.Errorf("Expected Client to detect and reject malicious server (%s) computation, but it succeeded", mode)
 			} else {
@@ -278,5 +311,5 @@ func TestClientDetectsPoisonedServerComputation(t *testing.T) {
 
 // startNormalServer is a helper that starts a normal server node
 func startNormalServer(ctx context.Context, bootstrapAddr, addr string, wg *sync.WaitGroup) (*grpc.Server, error) {
-	return server.StartServer(ctx, bootstrapAddr, 1, 4, addr, 5*time.Second, wg)
+	return server.StartServer(ctx, bootstrapAddr, 1, 4, addr, 5*time.Second, 2, nil, wg)
 }

@@ -24,7 +24,8 @@ func main() {
 	startLayerFlag := flag.Int("start", 1, "Starting layer (for server mode)")
 	endLayerFlag := flag.Int("end", 8, "Ending layer (for server mode)")
 	ttlFlag := flag.Duration("ttl", 10*time.Minute, "KV Cache TTL (e.g. 10m, 5s)")
-	taskIDFlag := flag.String("task", "task_petals_go", "Unique task identifier")
+	taskIDFlag := flag.String("task", "task_calyx_go", "Unique task identifier")
+	difficultyFlag := flag.Int("difficulty", 2, "Hashcash Proof-of-Work puzzle difficulty (number of leading zeros)")
 
 	flag.Parse()
 
@@ -35,11 +36,11 @@ func main() {
 	case "bootstrap":
 		runBootstrapMode(*addrFlag, *bootstrapAddrFlag)
 	case "server":
-		runServerMode(*addrFlag, *bootstrapAddrFlag, int32(*startLayerFlag), int32(*endLayerFlag), *ttlFlag)
+		runServerMode(*addrFlag, *bootstrapAddrFlag, int32(*startLayerFlag), int32(*endLayerFlag), *ttlFlag, *difficultyFlag)
 	case "client":
-		runClientMode(*bootstrapAddrFlag, int32(*startLayerFlag), int32(*endLayerFlag), *taskIDFlag)
+		runClientMode(*bootstrapAddrFlag, int32(*startLayerFlag), int32(*endLayerFlag), *taskIDFlag, *difficultyFlag)
 	case "demo":
-		runAutomatedDemo(*ttlFlag)
+		runAutomatedDemo(*ttlFlag, *difficultyFlag)
 	default:
 		fmt.Printf("Unknown mode: %s. Use -mode with 'bootstrap', 'server', 'client', or 'demo'\n", *modeFlag)
 		os.Exit(1)
@@ -62,16 +63,16 @@ func runBootstrapMode(addr, bootstrapAddr string) {
 	}, &wg)
 }
 
-func runServerMode(addr, bootstrapAddr string, startLayer, endLayer int32, ttl time.Duration) {
+func runServerMode(addr, bootstrapAddr string, startLayer, endLayer int32, ttl time.Duration, powDifficulty int) {
 	if addr == "" {
 		log.Fatal("[Main] Error: -addr parameter is required in 'server' mode (e.g. -addr=localhost:50051)")
 	}
-	log.Printf("[Main] Starting standalone Server Node (Layers %d-%d) on %s...", startLayer, endLayer, addr)
+	log.Printf("[Main] Starting standalone Server Node (Layers %d-%d) on %s with Hashcash Difficulty: %d...", startLayer, endLayer, addr, powDifficulty)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 
-	srv, err := server.StartServer(ctx, bootstrapAddr, startLayer, endLayer, addr, ttl, &wg)
+	srv, err := server.StartServer(ctx, bootstrapAddr, startLayer, endLayer, addr, ttl, powDifficulty, nil, &wg)
 	if err != nil {
 		cancel()
 		log.Fatalf("[Main] Failed to start Server: %v", err)
@@ -83,19 +84,19 @@ func runServerMode(addr, bootstrapAddr string, startLayer, endLayer int32, ttl t
 	}, &wg)
 }
 
-func runClientMode(bootstrapAddr string, startLayer, endLayer int32, taskID string) {
+func runClientMode(bootstrapAddr string, startLayer, endLayer int32, taskID string, powDifficulty int) {
 	log.Printf("[Main] Starting standalone Client Node...")
-	err := client.RunClient(bootstrapAddr, startLayer, endLayer, taskID)
+	err := client.RunClient(bootstrapAddr, startLayer, endLayer, taskID, powDifficulty, nil)
 	if err != nil {
 		log.Fatalf("[Main] Error running Client: %v", err)
 	}
 }
 
-func runAutomatedDemo(customTTL time.Duration) {
+func runAutomatedDemo(customTTL time.Duration, powDifficulty int) {
 	log.Println("================================================================================")
-	log.Println("   PETALS DECENTRALIZED P2P ARCHITECTURE - AUTOMATED DEMO IN GO")
+	log.Println("   CALYX DECENTRALIZED P2P ARCHITECTURE - AUTOMATED DEMO IN GO")
 	log.Println("================================================================================")
-	
+
 	// For the demo, if no custom TTL was passed, we set it to 4 seconds so the user
 	// can see the TTL cache cleanup happening visually in real-time without waiting 10 minutes.
 	demoTTL := customTTL
@@ -121,14 +122,14 @@ func runAutomatedDemo(customTTL time.Duration) {
 
 	// 2. Start Server Node 1 (Layers 1-4)
 	log.Printf("[Main] 2. Initializing Server 1 (Layers 1-4) on %s...", server1Addr)
-	sSrv1, err := server.StartServer(ctx, bootstrapAddr, 1, 4, server1Addr, demoTTL, &wg)
+	sSrv1, err := server.StartServer(ctx, bootstrapAddr, 1, 4, server1Addr, demoTTL, powDifficulty, nil, &wg)
 	if err != nil {
 		log.Fatalf("[Main] Failed to start Server 1 for Demo: %v", err)
 	}
 
 	// 3. Start Server Node 2 (Layers 5-8)
 	log.Printf("[Main] 3. Initializing Server 2 (Layers 5-8) on %s...", server2Addr)
-	sSrv2, err := server.StartServer(ctx, bootstrapAddr, 5, 8, server2Addr, demoTTL, &wg)
+	sSrv2, err := server.StartServer(ctx, bootstrapAddr, 5, 8, server2Addr, demoTTL, powDifficulty, nil, &wg)
 	if err != nil {
 		log.Fatalf("[Main] Failed to start Server 2 for Demo: %v", err)
 	}
@@ -137,15 +138,15 @@ func runAutomatedDemo(customTTL time.Duration) {
 	// 4. Start Client Pipeline execution
 	taskID := fmt.Sprintf("task_demo_%d", time.Now().Unix())
 	log.Printf("[Main] 4. Running Client Node to process layers 1 to 8 with TaskID '%s'", taskID)
-	
-	err = client.RunClient(bootstrapAddr, 1, 8, taskID)
+
+	err = client.RunClient(bootstrapAddr, 1, 8, taskID, powDifficulty, nil)
 	if err != nil {
 		log.Printf("[Main] Error running Client in Demo: %v", err)
 	}
 
 	// 5. Keep services alive to demonstrate the TTL KV Cache cleanup in action
 	log.Printf("[Main] 5. Waiting for TTL expiration (%s) to view KV Cache eviction...", demoTTL)
-	
+
 	// Sleep slightly longer than the TTL to ensure the background checker triggers the deletion
 	time.Sleep(demoTTL + 1500*time.Millisecond)
 
@@ -158,7 +159,7 @@ func runAutomatedDemo(customTTL time.Duration) {
 
 	wg.Wait()
 	log.Println("================================================================================")
-	log.Println("   END OF DEMONSTRATION - PETALS P2P GO COMPLETED SUCCESSFULLY!")
+	log.Println("   END OF DEMONSTRATION - CALYX P2P GO COMPLETED SUCCESSFULLY!")
 	log.Println("================================================================================")
 }
 
