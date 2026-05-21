@@ -28,7 +28,8 @@ func main() {
 	taskIDFlag := flag.String("task", "task_calyx_go", "Unique task identifier")
 	difficultyFlag := flag.Int("difficulty", 2, "Hashcash Proof-of-Work puzzle difficulty (number of leading zeros)")
 	dpNoiseFlag := flag.Float64("dp-noise", 0.001, "Standard deviation of Differential Privacy Gaussian noise (0.0 to disable)")
-	teeEnclaveFlag := flag.Bool("tee-enclave", true, "Simulate secure hardware enclaves (Intel SGX / AMD SEV)")
+	teeEnclaveFlag := flag.Bool("tee-enclave", true, "Enable secure hardware enclaves (Intel SGX / AMD SEV)")
+	enclaveSimulationFlag := flag.Bool("enclave-simulation", true, "Enable simulated enclave mode (if false, strict physical hardware mode is enforced)")
 	weightsFlag := flag.String("weights", "bin/layer_weights.bin", "Path to the binary transformer layer weights file")
 	modelFlag := flag.String("model", "google/gemma-2b", "Model ID served or requested by the node")
 	stunServerFlag := flag.String("stun-server", "stun.l.google.com:19302", "STUN server address for NAT traversal")
@@ -36,10 +37,20 @@ func main() {
 	flag.Parse()
 
 	// Propagate configuration flags to packages
+	crypto.EnclaveSimulation = *enclaveSimulationFlag
 	server.WeightsPath = *weightsFlag
 	server.ModelID = *modelFlag
 	server.StunServer = *stunServerFlag
 	client.ModelID = *modelFlag
+
+	if *teeEnclaveFlag && *enclaveSimulationFlag {
+		log.Println("################################################################################")
+		log.Println(" WARNING: TEE ENCLAVE RUNNING IN SIMULATION/DEVELOPMENT MODE!                    ")
+		log.Println(" The process memory is NOT protected by hardware CPU encryption (SGX/SEV).      ")
+		log.Println(" Sensitive model weights and client activations are vulnerable to memory dumps. ")
+		log.Println(" DO NOT USE THIS SIMULATION IN PUBLIC PRODUCTION ENVIRONMENTS!                  ")
+		log.Println("################################################################################")
+	}
 
 	// Configure standard log layout to make visual logging clean and neat
 	log.SetFlags(log.Ltime | log.Lmicroseconds)

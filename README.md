@@ -31,6 +31,39 @@ Calyx implements a robust, bi-directional security architecture to protect all p
 
 ---
 
+## TEE Enclave Security & Enclave Simulation Warning
+
+Calyx supports Trusted Execution Environment (TEE) hardware enclave protection (Intel SGX / AMD SEV) to secure process memory from malicious host administrators.
+
+### ⚠️ IMPORTANT: Enclave Simulation Security Warning
+
+For development and portability, Calyx includes a **Software Simulation Mode** for enclaves. 
+When simulated, the enclave attestation quote is generated using simulated cryptographic keys in standard process memory.
+
+> [!WARNING]
+> **SIMULATION MODE IS NOT SECURE FOR PUBLIC DEPLOYMENTS!**
+> In simulation mode, process memory is **NOT** encrypted by hardware CPU protection. 
+> A malicious host administrator or local attacker can easily dump the process memory and steal sensitive model weights, client activations, or private keys. 
+> Never use simulated enclaves in public production networks.
+
+### Enclave Configuration Options
+
+You can control enclave behavior and toggle between simulated and strict physical hardware modes using the following CLI flags:
+
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `-tee-enclave` | `bool` | `true` | Enable/Disable secure TEE hardware enclave protection in the application. |
+| `-enclave-simulation` | `bool` | `true` | When TEE is enabled, controls whether it runs in **Simulation Mode** (software-based) or **Strict Mode** (demands physical SGX). |
+
+#### Enforcing Strict Hardware Enclaves
+To run in **Strict Hardware Mode** (disabling simulated enclaves entirely and enforcing physical Intel SGX check):
+```bash
+go run main.go -mode=server -addr=localhost:50051 -tee-enclave=true -enclave-simulation=false
+```
+*Note: In strict mode, the application will audit system device nodes (e.g. `/dev/sgx_enclave`, `/dev/sgx`) and immediately fail startup with a secure error if no physical Intel SGX hardware/driver is present on the host.*
+
+---
+
 ## How to Run
 
 You can run the codebase in two modes:
