@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package petals;
+
+option go_package = "connect/proto";
+
+// Tensor represents activations or hidden states
+message Tensor {
+  string id = 1;          // Unique tensor ID
+  string task_id = 2;     // The task ID this execution belongs to
+  repeated double data = 3; // Matrix of float64 data
+  repeated int64 shape = 4; // Dimensions of the tensor (e.g. [seq_len, hidden_dim])
+}
+
+message RegisterRequest {
+  string address = 1;
+  int32 start_layer = 2;
+  int32 end_layer = 3;
+}
+
+message RegisterResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message RouteRequest {
+  int32 start_layer = 1;
+  int32 end_layer = 2;
+}
+
+message RouteResponse {
+  repeated string addresses = 1;
+}
+
+message ForwardRequest {
+  Tensor tensor = 1;
+  repeated string route = 2;            // Fully planned route of node addresses
+  int32 current_route_index = 3;        // Index of current node in the route path
+}
+
+message ForwardResponse {
+  Tensor tensor = 1;
+}
+
+service BootstrapService {
+  rpc RegisterNode(RegisterRequest) returns (RegisterResponse);
+  rpc FindRoute(RouteRequest) returns (RouteResponse);
+}
+
+service P2PService {
+  rpc Forward(stream ForwardRequest) returns (stream ForwardResponse);
+}

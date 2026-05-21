@@ -1,0 +1,7 @@
+06:36:26.995093 [Main] Starting standalone Server Node (Layers 5-8) on localhost:50102...
+06:36:26.997450 [Server Layers 5-8] Registered on Bootstrap at localhost:50100 successfully!
+06:36:26.997583 [Server Layers 5-8] P2P server started on localhost:50102
+06:36:28.500751 [Server Layers 5-8] KV Cache: Initialized remote cache for TaskID e2e_blackbox_1779356188
+06:36:28.500765 [Server Layers 5-8] KV Cache Part 2: Processed Tensor token_1_processed_1-4 (Accumulated context size: 4 floats)
+06:36:29.300900 [Server Layers 5-8] KV Cache Part 2: Processed Tensor token_2_processed_1-4 (Accumulated context size: 8 floats)
+06:36:30.101236 [Server Layers 5-8] KV Cache Part 2: Processed Tensor token_3_processed_1-4 (Accumulated context size: 12 floats)

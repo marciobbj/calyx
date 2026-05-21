@@ -1,0 +1,48 @@
+name: Go P2P CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build-and-test:
+    name: Build and Run P2P Tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out codebase
+      uses: actions/checkout@v3
+
+    - name: Set up Go environment
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+        cache: true
+
+    - name: Install gRPC and Protobuf Go plugins
+      run: |
+        go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.31.0
+        go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.3.0
+        echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
+    - name: Run Go Formatter Verification
+      run: |
+        if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+          echo "Source files are not formatted properly! Run 'make fmt'."
+          gofmt -s -l .
+          exit 1
+        fi
+
+    - name: Run Go Static Analysis
+      run: make vet
+
+    - name: Compile P2P CLI Binary
+      run: make build
+
+    - name: Run Unit and Package Integration Tests
+      run: make test
+
+    - name: Run Black-box CLI Process E2E Integration Tests
+      run: make e2e-test
