@@ -36,7 +36,7 @@ Calyx implements a robust, bi-directional security architecture to protect all p
 
 Calyx supports Trusted Execution Environment (TEE) hardware enclave protection (Intel SGX / AMD SEV) to secure process memory from malicious host administrators.
 
-### ⚠️ IMPORTANT: Enclave Simulation Security Warning
+### IMPORTANT: Enclave Simulation Warning
 
 For development and portability, Calyx includes a **Software Simulation Mode** for enclaves. 
 When simulated, the enclave attestation quote is generated using simulated cryptographic keys in standard process memory.
@@ -111,6 +111,14 @@ go run main.go -mode=server -addr=localhost:50052 -bootstrap=localhost:50050 -st
 ```bash
 go run main.go -mode=client -bootstrap=localhost:50050 -start=1 -end=8 -task=my_custom_task_id
 ```
+
+---
+
+### Mode 3: Calyx Hybrid Distributed Sandbox (Docker Compose)
+
+For a fully containerized environment that integrates the Go control plane with a native C++ high-performance data plane (offloading layers dynamically and sharing KV caches for GGUF models in real-time), we provide a dedicated Docker Compose sandbox.
+
+Refer to the [Sandbox README](file:///home/io/workspace/calyx/sandbox/README.md) for more details and complete setup instructions.
 
 ---
 
