@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  bootstrap:
+    build:
+      context: ../
+      dockerfile: sandbox/bootstrap/Dockerfile
+    image: calyx-sandbox-bootstrap
+    container_name: calyx-bootstrap
+    ports:
+      - "50050:50050"
+
+  server1:
+    build:
+      context: ../
+      dockerfile: sandbox/server/Dockerfile
+    image: calyx-sandbox-server
+    container_name: calyx-server1
+    depends_on:
+      - bootstrap
+    environment:
+      RPC_PORT: 8001
+      SERVER_PORT: 50051
+      START_LAYER: 1
+      END_LAYER: 16
+      MODEL_ID: microsoft/Phi-4-mini-instruct
+      BOOTSTRAP_ADDR: bootstrap:50050
+      SERVER_NAME: server1
+    ports:
+      - "50051:50051"
+      - "8001:8001"
+
+  server2:
+    build:
+      context: ../
+      dockerfile: sandbox/server/Dockerfile
+    image: calyx-sandbox-server
+    container_name: calyx-server2
+    depends_on:
+      - bootstrap
+    environment:
+      RPC_PORT: 8002
+      SERVER_PORT: 50052
+      START_LAYER: 17
+      END_LAYER: 32
+      MODEL_ID: microsoft/Phi-4-mini-instruct
+      BOOTSTRAP_ADDR: bootstrap:50050
+      SERVER_NAME: server2
+    ports:
+      - "50052:50052"
+      - "8002:8002"
+
+  client:
+    build:
+      context: ../
+      dockerfile: sandbox/client/Dockerfile
+    image: calyx-sandbox-client
+    container_name: calyx-client
+    depends_on:
+      - bootstrap
+      - server1
+      - server2
+    environment:
+      BOOTSTRAP_ADDR: bootstrap:50050
+      MODEL_ID: microsoft/Phi-4-mini-instruct
+      PROMPT: "Explique em uma frase o que é o Calyx e por que ele usa criptografia e SGX Enclaves."
+    volumes:
+      - ./models:/models:ro
+    ports:
+      - "8080:8080"
