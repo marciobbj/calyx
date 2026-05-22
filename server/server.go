@@ -353,9 +353,16 @@ func (s *Server) Register(bootstrapAddr string) error {
 
 // StartServer runs the gRPC server and starts the TTL daemon
 func StartServer(ctx context.Context, bootstrapAddr string, startLayer, endLayer int32, addr string, ttl time.Duration, powDifficulty int, network *sync.Map, wg *sync.WaitGroup, teeEnclave bool) (*grpc.Server, error) {
-	lis, err := net.Listen("tcp", addr)
+	// Listen on 0.0.0.0:port to be fully robust inside containerized environments,
+	// but preserve the original host/IP in srv.address for DHT registration and discovery.
+	_, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to listen on %s: %w", addr, err)
+		port = addr
+	}
+	listenAddr := "0.0.0.0:" + port
+	lis, err := net.Listen("tcp", listenAddr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to listen on %s: %w", listenAddr, err)
 	}
 
 	// Dynamically query external IP mapped via STUN for WAN NAT traversal diagnostics
